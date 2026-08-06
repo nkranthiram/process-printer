@@ -136,3 +136,53 @@ class ProcessMapVersionOut(BaseModel):
     changed_by: str | None
     created_at: dt.datetime
     is_current: bool
+
+
+class TranscriptTurnIn(BaseModel):
+    role: str  # "user" | "assistant"
+    text: str
+    ref: str  # e.g. "turn-3", assigned by the frontend
+
+
+class ConsolidateRequestIn(BaseModel):
+    transcript: list[TranscriptTurnIn]
+
+
+class DraftChangeItemOut(BaseModel):
+    id: str
+    session_id: str
+    change_type: str
+    proposed_change: dict
+    rationale: str | None
+    source_message_refs: list[str]
+    status: str
+    superseded_by_item_id: str | None
+    human_override: bool
+    created_at: dt.datetime
+    updated_at: dt.datetime
+
+
+class ReviewSessionOut(BaseModel):
+    id: str
+    document_id: str
+    base_process_map_id: str
+    status: str
+    created_at: dt.datetime
+    confirmed_at: dt.datetime | None
+    resulting_process_map_id: str | None
+    items: list[DraftChangeItemOut]
+
+
+class DraftItemUpdateIn(BaseModel):
+    status: str | None = None  # approved | rejected | needs_clarification
+    change_type: str | None = None
+    proposed_change: dict | None = None
+    rationale: str | None = None
+
+
+class ConfirmResultOut(BaseModel):
+    success: bool
+    new_version: ProcessMapVersionOut | None = None
+    change_summaries: list[str] = []
+    failed_item_id: str | None = None
+    error: str | None = None

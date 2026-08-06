@@ -197,6 +197,60 @@ the hand-rolled longest-path layering is a few dozen lines and fully covered by
 fan-outs, many cross-links) that a real layout engine's cycle/crossing-
 minimization would matter.
 
+### "Review & Apply Changes" — batch feedback, versioning granularity resolved by debate
+**Date:** 2026-08-06 (tasks 29–33).
+**Decision:** Added a session-scoped, conversational feedback flow layered on
+top of (not replacing) the per-message `ChangeRequest` flow. A BPA converses
+freely; clicking "Review & Apply Changes" runs an LLM reconciliation pass over
+the transcript, producing grounded `DraftChangeItem`s the BPA can
+approve/reject/edit individually; confirming applies every **approved** item
+as **exactly one** new `ProcessMapVersion` — not one version per edit, not one
+opaque version per whole session.
+**Why this granularity:** resolved via a 2-round claude/gpt debate (see chat
+history) that initially split on whether the unit of a version should be one
+edit or one whole batch. Landed on: the unit of versioning is whatever a human
+approved together, at any size — which subsumes both original positions (a
+1-item approval behaves exactly like the old per-message flow; an N-item
+approval is one clean version) and avoids materializing meaningless
+"mid-batch" states that were never themselves approved by anyone (an artifact
+of internal apply order, not a real checkpoint).
+**How atomicity is enforced:** `apply_change_set` applies every edit in a
+batch to a single in-memory draft, validating the DAG after each mutation for
+exact failure localization, but persists to the database only once, only if
+every edit succeeds. A mid-batch failure leaves the database completely
+untouched — proven via a deliberately-reintroduced regression (see
+`docs/evidence/29-30-review-apply-changes.md`).
+**Alternatives considered:** one version per edit within the approved set
+(loses the "one coherent approval event" framing GPT argued for, and pollutes
+history with N rows for what was conceptually one BPA decision) — rejected.
+One opaque version per session with edits only in a metadata blob (Claude's
+critique: doesn't actually deliver mechanical rollback, just an audit
+narrative) — rejected in favor of keeping `_apply_single_change` reusable and
+validated per-step without paying for durable intermediate storage.
+**Revisit if:** dependency-aware clustering becomes necessary (two coupled
+edits currently apply independently and could partially succeed in confusing
+ways) — flagged as a named follow-up, not built this round.
+
+### Chat remains stateless; the frontend supplies the transcript
+**Date:** 2026-08-06.
+**Decision:** Rather than add server-side chat/conversation persistence, the
+`/consolidate` endpoint takes the transcript as a request body (the frontend
+already holds it in React state from `ChatPanel`'s turn history).
+**Why:** avoids a larger persistence/session-management build-out for a
+single-user local app, and keeps the existing stateless `/api/chat` endpoint
+unchanged. The tradeoff is explicit: this doesn't deliver the "incremental,
+per-turn update" half of the debate's conclusion as fully as a
+server-persisted transcript would — each consolidate call re-reconciles the
+full transcript rather than updating a running list turn by turn. Grounding
+discipline (citations, `needs_clarification` for ambiguity) is unaffected;
+only the *mechanism* is a full-transcript reconciliation pass rather than a
+true incremental pipeline.
+**Revisit if:** conversations get long enough that full-transcript
+reconciliation becomes slow/expensive, or if multi-session/multi-device
+continuity is ever needed — at that point, persisting chat turns server-side
+(and making `/consolidate` operate incrementally against stored turns) is the
+natural next step.
+
 ## What's next (named, not silently deferred)
 
 - Real file-upload endpoint wired to the same ingest→extract→synthesize pipeline,
@@ -211,6 +265,14 @@ minimization would matter.
 - Change-request retrieval quality: a vaguely-worded add/modify request can miss
   the right anchor task and fall back to `unclear` — worth revisiting if this
   becomes a common friction point (see `docs/evidence/22-ui-overhaul-and-versioning.md`)
-- `add_task`/`modify_task` change types are implemented in `versioning.py` but
-  not yet exercised by a live end-to-end run the way `remove_task` was — worth a
-  follow-up live check
+- `add_task`/`modify_task` change types are implemented in `versioning.py` and
+  have now both been live-verified end-to-end via the "Review & Apply Changes"
+  flow (see `docs/evidence/29-30-review-apply-changes.md`) — this item is closed
+- No dependency-aware clustering of coupled edits in `apply_change_set` (see
+  `docs/evidence/29-30-review-apply-changes.md`)
+- No server-side chat transcript persistence — `/consolidate` re-reconciles
+  the full transcript each call rather than updating incrementally (see the
+  "Chat remains stateless" decision above)
+- The old per-message `ChangeRequest` path and the new session-based
+  `ReviewSession` path aren't deduplicated against each other if a BPA
+  triggers both for overlapping feedback in one conversation

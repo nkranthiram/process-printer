@@ -1,12 +1,22 @@
-"""Applies an approved ChangeRequest as a brand-new ProcessMapVersion.
+"""Applies approved change(s) as a brand-new ProcessMapVersion.
 
 Core rule (see docs/process-methodology.md, architecture.md): the process map is
-never edited in place. Every applied change clones the current version's tasks
-and edges into a new ProcessMapVersion row, applies exactly one mutation to the
-clone, validates the result with the same structural checks used at build time
+never edited in place. Every applied change (or set of changes, approved
+together) clones the current version's tasks and edges into a new
+ProcessMapVersion row, applies the mutation(s) to the clone, validates the
+result with the same structural checks used at build time
 (app/pipeline/synthesis.py's DAG validator), and only commits if it's still a
-valid DAG. The old version is left completely untouched — that's what makes the
-version history real, not just a label bump.
+valid DAG. The old version is left completely untouched.
+
+Two entry points:
+- apply_change: one edit -> one version (the original per-message ChangeRequest
+  flow, unchanged behavior).
+- apply_change_set: N edits, approved together in one BPA confirm action (the
+  "Review & Apply Changes" consolidated flow) -> exactly ONE version if every
+  edit validates; if any edit fails, nothing is committed and the caller learns
+  exactly which edit failed. This is the versioning granularity the
+  claude/gpt debate converged on: the unit of a version is "whatever a human
+  approved together," not "one edit" or "one whole chat session" by default.
 """
 from __future__ import annotations
 
@@ -30,14 +40,25 @@ from app.pipeline.synthesis import (
 class ChangeApplyError(Exception):
     """Raised when a proposed change would break the process map (invalid DAG,
     unknown node type, references a task that doesn't exist, etc). The caller
-    (the change-request approval endpoint) catches this and marks the request
-    apply_failed with the reason, rather than silently committing a broken map."""
+    catches this and marks the request/item apply_failed with the reason,
+    rather than silently committing a broken map."""
+
+    def __init__(self, message: str, item_id: str | None = None):
+        super().__init__(message)
+        self.item_id = item_id  # set by apply_change_set so the API layer can
+        # report exactly which DraftChangeItem broke the batch
 
 
 @dataclass
 class AppliedChange:
     new_version: ProcessMapVersion
     change_summary: str
+
+
+@dataclass
+class AppliedChangeSet:
+    new_version: ProcessMapVersion
+    change_summaries: list[str]
 
 
 def _next_label(current_label: str) -> str:
@@ -74,9 +95,12 @@ def _validate_structure_only(draft: ProcessMapDraft) -> list[str]:
     return errors
 
 
-def apply_change(db: Session, document_id: str, base_version: ProcessMapVersion,
-                  change_type: str, payload: dict, changed_by: str) -> AppliedChange:
-    """Applies one of: add_task, remove_task, modify_task, modify_edge.
+def _apply_single_change(draft: ProcessMapDraft, change_type: str, payload: dict) -> str:
+    """Mutates `draft` IN PLACE to apply one edit, validates the result, and
+    returns a human-readable summary. Raises ChangeApplyError (leaving draft
+    partially mutated — callers that need atomicity across multiple edits must
+    operate on a throwaway copy, see apply_change_set) if the edit is invalid
+    or the resulting structure would be invalid.
 
     Payload shapes:
       add_task:    {"after_task_id": str, "node_type": str, "title": str,
@@ -86,7 +110,6 @@ def apply_change(db: Session, document_id: str, base_version: ProcessMapVersion,
                      "node_type": str | None}
       modify_edge: {"edge_from": str, "edge_to": str, "condition_label": str}
     """
-    draft = _draft_from_version(db, base_version)
     task_by_id = {t.id: t for t in draft.tasks}
     summary: str
 
@@ -97,17 +120,13 @@ def apply_change(db: Session, document_id: str, base_version: ProcessMapVersion,
         node_type = payload.get("node_type", "classification")
         if node_type not in VALID_NODE_TYPES:
             raise ChangeApplyError(f"invalid node_type {node_type!r}")
-        new_id = f"new-{payload.get('title', 'task')[:12].lower().replace(' ', '-')}-{len(draft.tasks)}"
+        new_id = f"new-{payload.get('title', 'task')[:12].lower().replace(' ', '-')}-{len(draft.tasks)}-{uuid.uuid4().hex[:6]}"
         anchor = task_by_id[after_id]
         new_task = TaskDraft(
             id=new_id, node_type=node_type, title=payload["title"],
             description=payload.get("description", ""), claim_refs=[],
             position=(anchor.position[0], anchor.position[1] + 0.5),
         )
-        # Splice the new task in after `after_id`: any edge that used to leave
-        # after_id now leaves the new task instead, and after_id now points only
-        # at the new task. This inserts inline rather than just bolting a new
-        # disconnected node onto the graph.
         outgoing = [e for e in draft.edges if e.from_id == after_id]
         draft.edges = [e for e in draft.edges if e.from_id != after_id]
         draft.edges.append(EdgeDraft(from_id=after_id, to_id=new_id, label=payload.get("condition_label") or ""))
@@ -124,8 +143,6 @@ def apply_change(db: Session, document_id: str, base_version: ProcessMapVersion,
         incoming = [e for e in draft.edges if e.to_id == task_id]
         outgoing = [e for e in draft.edges if e.from_id == task_id]
         draft.edges = [e for e in draft.edges if e.from_id != task_id and e.to_id != task_id]
-        # Reconnect: every predecessor now points at every successor directly,
-        # so removing a middle step doesn't strand the rest of the chain.
         for inc in incoming:
             for out in outgoing:
                 draft.edges.append(EdgeDraft(from_id=inc.from_id, to_id=out.to_id, label=inc.label))
@@ -165,11 +182,16 @@ def apply_change(db: Session, document_id: str, base_version: ProcessMapVersion,
     if errors:
         raise ChangeApplyError("resulting process map would be invalid: " + "; ".join(errors))
 
+    return summary
+
+
+def _persist_new_version(db: Session, document_id: str, base_version: ProcessMapVersion,
+                          draft: ProcessMapDraft, change_summary: str, changed_by: str) -> ProcessMapVersion:
     new_version = ProcessMapVersion(
         document_id=document_id,
         version_label=_next_label(base_version.version_label),
         status="draft",
-        change_summary=summary,
+        change_summary=change_summary,
         changed_by=changed_by,
     )
     db.add(new_version)
@@ -196,5 +218,49 @@ def apply_change(db: Session, document_id: str, base_version: ProcessMapVersion,
             from_task_id=id_map[e.from_id], to_task_id=id_map[e.to_id],
             condition_label=e.label or None,
         ))
+    return new_version
 
+
+def apply_change(db: Session, document_id: str, base_version: ProcessMapVersion,
+                  change_type: str, payload: dict, changed_by: str) -> AppliedChange:
+    """One edit -> one version. Unchanged behavior for the per-message
+    ChangeRequest approval flow."""
+    draft = _draft_from_version(db, base_version)
+    summary = _apply_single_change(draft, change_type, payload)
+    new_version = _persist_new_version(db, document_id, base_version, draft, summary, changed_by)
     return AppliedChange(new_version=new_version, change_summary=summary)
+
+
+@dataclass
+class ChangeSetItemInput:
+    item_id: str  # DraftChangeItem.id, for identifying the failing item on error
+    change_type: str
+    payload: dict
+
+
+def apply_change_set(db: Session, document_id: str, base_version: ProcessMapVersion,
+                      items: list[ChangeSetItemInput], changed_by: str) -> AppliedChangeSet:
+    """N edits, approved together -> exactly ONE version if every edit
+    validates. Applies each edit sequentially to a single in-memory draft
+    (never persisted mid-sequence — nothing is written to the DB until the
+    whole set succeeds), so a mid-set failure leaves the database completely
+    untouched rather than a half-applied state. On failure, raises
+    ChangeApplyError tagged with which item failed (via args[1]) so the caller
+    can surface that specific item back into the review UI without discarding
+    the others.
+    """
+    draft = _draft_from_version(db, base_version)
+    summaries: list[str] = []
+
+    for item in items:
+        try:
+            summary = _apply_single_change(draft, item.change_type, item.payload)
+        except ChangeApplyError as e:
+            # Re-raise with the failing item_id attached so the API layer can
+            # report exactly which item broke the batch, not just "it failed."
+            raise ChangeApplyError(str(e), item_id=item.item_id) from e
+        summaries.append(summary)
+
+    combined_summary = "; ".join(summaries)
+    new_version = _persist_new_version(db, document_id, base_version, draft, combined_summary, changed_by)
+    return AppliedChangeSet(new_version=new_version, change_summaries=summaries)

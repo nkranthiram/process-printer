@@ -95,6 +95,45 @@ export interface ProcessMapVersionSummary {
   is_current: boolean
 }
 
+export interface TranscriptTurn {
+  role: 'user' | 'assistant'
+  text: string
+  ref: string
+}
+
+export interface DraftChangeItem {
+  id: string
+  session_id: string
+  change_type: 'add_task' | 'remove_task' | 'modify_task' | 'modify_edge' | 'needs_clarification'
+  proposed_change: Record<string, unknown>
+  rationale: string | null
+  source_message_refs: string[]
+  status: 'draft' | 'approved' | 'rejected' | 'needs_clarification' | 'superseded' | 'apply_failed' | 'applied'
+  superseded_by_item_id: string | null
+  human_override: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface ReviewSession {
+  id: string
+  document_id: string
+  base_process_map_id: string
+  status: 'open' | 'reconciled' | 'confirmed' | 'discarded'
+  created_at: string
+  confirmed_at: string | null
+  resulting_process_map_id: string | null
+  items: DraftChangeItem[]
+}
+
+export interface ConfirmResult {
+  success: boolean
+  new_version: ProcessMapVersionSummary | null
+  change_summaries: string[]
+  failed_item_id: string | null
+  error: string | null
+}
+
 export interface ChatSource {
   task_id: string | null
   task_title: string | null
@@ -184,6 +223,39 @@ export function approveChangeRequest(documentId: string, crId: string, decisionN
 
 export function rejectChangeRequest(documentId: string, crId: string, decisionNotes?: string): Promise<ChangeRequest> {
   return postJSON(`/api/documents/${documentId}/change-requests/${crId}/reject`, { decision_notes: decisionNotes ?? null })
+}
+
+export async function getCurrentReviewSession(documentId: string): Promise<ReviewSession | null> {
+  return getJSON(`/api/documents/${documentId}/review-sessions/current`)
+}
+
+export function consolidateReviewSession(documentId: string, transcript: TranscriptTurn[]): Promise<ReviewSession> {
+  return postJSON(`/api/documents/${documentId}/review-sessions/consolidate`, { transcript })
+}
+
+export async function updateDraftItem(
+  documentId: string,
+  sessionId: string,
+  itemId: string,
+  body: { status?: string; change_type?: string; proposed_change?: Record<string, unknown>; rationale?: string },
+): Promise<DraftChangeItem> {
+  const res = await fetch(`${API_BASE}/api/documents/${documentId}/review-sessions/${sessionId}/items/${itemId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    throw new Error(`PATCH draft item failed: ${res.status} ${await res.text()}`)
+  }
+  return res.json()
+}
+
+export function confirmReviewSession(documentId: string, sessionId: string): Promise<ConfirmResult> {
+  return postJSON(`/api/documents/${documentId}/review-sessions/${sessionId}/confirm`, {})
+}
+
+export function discardReviewSession(documentId: string, sessionId: string): Promise<ReviewSession> {
+  return postJSON(`/api/documents/${documentId}/review-sessions/${sessionId}/discard`, {})
 }
 
 export async function updateIssueFeedback(

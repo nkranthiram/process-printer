@@ -155,3 +155,100 @@ def test_unknown_task_id_is_rejected(db_session):
             payload={"task_id": "not-a-real-id", "title": "x"},
             changed_by="test",
         )
+
+
+# ---------------------------------------------------------------------------
+# apply_change_set: N edits approved together -> exactly ONE version, or
+# (on any failure) the database is left completely untouched. See
+# docs/evidence for the claude/gpt debate this resolves.
+# ---------------------------------------------------------------------------
+
+from app.pipeline.versioning import ChangeSetItemInput, apply_change_set
+
+
+def test_change_set_applies_multiple_edits_as_exactly_one_version(db_session):
+    doc, pm, (t1, t2, t3) = _seed_linear_map(db_session)
+
+    result = apply_change_set(
+        db_session, doc.id, pm,
+        items=[
+            ChangeSetItemInput(item_id="i1", change_type="add_task", payload={
+                "after_task_id": t1.id, "node_type": "classification",
+                "title": "New middle step", "description": "desc",
+            }),
+            ChangeSetItemInput(item_id="i2", change_type="modify_task", payload={
+                "task_id": t3.id, "description": "Updated decide description",
+            }),
+        ],
+        changed_by="test",
+    )
+    db_session.commit()
+
+    # Exactly one new version, not two.
+    all_versions = db_session.query(ProcessMapVersion).filter_by(document_id=doc.id).all()
+    assert len(all_versions) == 2  # base (v1) + the one new version
+    assert result.new_version.version_label == "v2"
+    assert len(result.change_summaries) == 2
+
+    new_tasks = {t.title: t for t in db_session.query(ProcessTask).filter_by(process_map_id=result.new_version.id)}
+    assert len(new_tasks) == 4  # 3 original + 1 added
+    assert "New middle step" in new_tasks
+    assert new_tasks["Decide"].description == "Updated decide description"
+
+
+def test_change_set_atomicity_nothing_committed_if_any_edit_fails(db_session):
+    """RED-BEFORE-GREEN CONTROL: if edit 2 of 2 is invalid, the database must
+    be left completely untouched — no partial version, no orphan tasks from
+    edit 1. This is the whole point of applying to an in-memory draft and only
+    persisting once at the end."""
+    doc, pm, (t1, t2, t3) = _seed_linear_map(db_session)
+    versions_before = db_session.query(ProcessMapVersion).filter_by(document_id=doc.id).count()
+    tasks_before = db_session.query(ProcessTask).count()
+
+    with pytest.raises(ChangeApplyError) as exc_info:
+        apply_change_set(
+            db_session, doc.id, pm,
+            items=[
+                ChangeSetItemInput(item_id="i1", change_type="add_task", payload={
+                    "after_task_id": t1.id, "node_type": "classification",
+                    "title": "Valid step", "description": "desc",
+                }),
+                ChangeSetItemInput(item_id="i2", change_type="modify_task", payload={
+                    "task_id": "not-a-real-id", "title": "boom",
+                }),
+            ],
+            changed_by="test",
+        )
+    db_session.rollback()
+
+    assert exc_info.value.item_id == "i2"
+
+    versions_after = db_session.query(ProcessMapVersion).filter_by(document_id=doc.id).count()
+    tasks_after = db_session.query(ProcessTask).count()
+    assert versions_after == versions_before
+    assert tasks_after == tasks_before
+
+
+def test_change_set_failure_identifies_the_correct_failing_item_not_just_any(db_session):
+    """A 3-item set where the FIRST two are valid and the THIRD is invalid —
+    proves item_id tracking survives multiple successful applies before the
+    failure, not just the trivial one-good-one-bad case."""
+    doc, pm, (t1, t2, t3) = _seed_linear_map(db_session)
+
+    with pytest.raises(ChangeApplyError) as exc_info:
+        apply_change_set(
+            db_session, doc.id, pm,
+            items=[
+                ChangeSetItemInput(item_id="i1", change_type="modify_task", payload={
+                    "task_id": t1.id, "description": "updated 1",
+                }),
+                ChangeSetItemInput(item_id="i2", change_type="modify_task", payload={
+                    "task_id": t2.id, "description": "updated 2",
+                }),
+                ChangeSetItemInput(item_id="i3", change_type="remove_task", payload={
+                    "task_id": "does-not-exist",
+                }),
+            ],
+            changed_by="test",
+        )
+    assert exc_info.value.item_id == "i3"

@@ -215,7 +215,7 @@ export default function App() {
         )}
         {tab === 'chat' && (
           <div className="mx-auto w-full max-w-2xl">
-            <ChatPanel documentId={documentId!} />
+            <ChatPanel documentId={documentId!} onChangesApplied={refetchAll} />
           </div>
         )}
       </main>

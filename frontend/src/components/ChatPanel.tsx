@@ -1,8 +1,10 @@
 import { useState, type FormEvent } from 'react'
-import { sendChat, type ChatResponse } from '../api'
+import { sendChat, consolidateReviewSession, type ChatResponse, type ReviewSession, type TranscriptTurn } from '../api'
+import ReviewSessionPanel from './ReviewSessionPanel'
 
 interface Props {
   documentId: string
+  onChangesApplied: () => void
 }
 
 interface Turn {
@@ -18,11 +20,14 @@ const MODE_LABEL: Record<string, { label: string; className: string }> = {
   change_request_logged: { label: 'Logged as a pending change request', className: 'text-blue-600 font-medium' },
 }
 
-export default function ChatPanel({ documentId }: Props) {
+export default function ChatPanel({ documentId, onChangesApplied }: Props) {
   const [input, setInput] = useState('')
   const [turns, setTurns] = useState<Turn[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [consolidating, setConsolidating] = useState(false)
+  const [reviewSession, setReviewSession] = useState<ReviewSession | null>(null)
+  const [reviewError, setReviewError] = useState<string | null>(null)
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
@@ -41,6 +46,21 @@ export default function ChatPanel({ documentId }: Props) {
       setError(err instanceof Error ? err.message : 'Something went wrong asking the chatbot.')
     } finally {
       setLoading(false)
+    }
+  }
+
+  async function handleReviewAndApply() {
+    if (turns.length === 0) return
+    setConsolidating(true)
+    setReviewError(null)
+    try {
+      const transcript: TranscriptTurn[] = turns.map((t, i) => ({ role: t.role, text: t.text, ref: `turn-${i + 1}` }))
+      const session = await consolidateReviewSession(documentId, transcript)
+      setReviewSession(session)
+    } catch (err) {
+      setReviewError(err instanceof Error ? err.message : 'Failed to consolidate the conversation.')
+    } finally {
+      setConsolidating(false)
     }
   }
 
@@ -96,6 +116,20 @@ export default function ChatPanel({ documentId }: Props) {
         {loading && <div className="text-xs text-slate-400">Thinking…</div>}
         {error && <div className="text-xs text-rose-600">{error}</div>}
       </div>
+
+      <div className="border-t border-slate-100 px-5 py-2.5">
+        {reviewError && <p className="mb-2 text-xs text-rose-600">{reviewError}</p>}
+        <button
+          type="button"
+          disabled={turns.length === 0 || consolidating}
+          onClick={handleReviewAndApply}
+          data-testid="review-and-apply-button"
+          className="w-full rounded-xl border border-blue-200 bg-blue-50 px-3.5 py-2 text-sm font-medium text-blue-700 hover:bg-blue-100 disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          {consolidating ? 'Consolidating this conversation…' : 'Review & Apply Changes'}
+        </button>
+      </div>
+
       <form onSubmit={handleSubmit} className="flex gap-2 border-t border-slate-100 p-3">
         <input
           value={input}
@@ -112,6 +146,16 @@ export default function ChatPanel({ documentId }: Props) {
           Send
         </button>
       </form>
+
+      {reviewSession && (
+        <ReviewSessionPanel
+          documentId={documentId}
+          session={reviewSession}
+          onSessionChanged={setReviewSession}
+          onApplied={onChangesApplied}
+          onClose={() => setReviewSession(null)}
+        />
+      )}
     </div>
   )
 }

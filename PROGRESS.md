@@ -36,6 +36,11 @@ Legend: `todo` · `in_progress` · `blocked` · `done`
 | 26 | API: change-request approve/reject, issue PATCH feedback endpoint, process-map version history endpoint | 24, 25 | done | 68/68 backend suite (incl. 6 new live-HTTP tests) | `docs/evidence/22-ui-overhaul-and-versioning.md` |
 | 27 | Frontend: FeedbackPanel (issue BPA feedback/resolve) + ChangeRequestsPanel (approve/reject) + version history badge | 22, 26 | done | 30/30 frontend tests (5 new IssuesPanel, 5 new ChangeRequestsPanel, App.test.tsx updated) | `docs/evidence/22-ui-overhaul-and-versioning.md` |
 | 28 | Live end-to-end verification against the real running app + real LLM key | 22-27 | done | manual curl walkthrough: coverage question refused, change request drafted+approved live creating v2 with a task genuinely removed, issue feedback PATCH confirmed | `docs/evidence/22-ui-overhaul-and-versioning.md` |
+| 29 | Claude/GPT debate: consolidated "Review & Apply Changes" batch feedback design (versioning granularity, consolidation mechanism, dispute loop) | 28 | done | n/a (design debate, 2 rounds) | delivered in chat |
+| 30 | Backend: `ReviewSession`/`DraftChangeItem` models, `versioning.apply_change_set` (N edits -> 1 version, atomic), `review_session.py` consolidation pipeline | 29 | done | 15/15 pytest (9 versioning incl. 3 new batch tests, 6 review_session), 2 real red-before-green proofs | `docs/evidence/29-30-review-apply-changes.md` |
+| 31 | API: consolidate / current / PATCH item / confirm / discard endpoints for review sessions | 30 | done | 84/84 full backend suite (7 new live-HTTP tests incl. stale-HEAD 409 check) | `docs/evidence/29-30-review-apply-changes.md` |
+| 32 | Frontend: "Review & Apply Changes" button (ChatPanel) + `ReviewSessionPanel` (item-level approve/reject/edit, confirm/discard) | 31 | done | 37/37 frontend tests (5 new ReviewSessionPanel, 2 new ChatPanel), tsc clean, build clean | `docs/evidence/29-30-review-apply-changes.md` |
+| 33 | Live end-to-end verification: real 5-turn transcript, real LLM consolidation, 2-item batch approved and confirmed as exactly ONE version | 30-32 | done | live curl walkthrough against real running server + real ANTHROPIC_API_KEY | `docs/evidence/29-30-review-apply-changes.md` |
 
 ## Notes / constraints on record
 

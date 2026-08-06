@@ -13,8 +13,10 @@ from app.models.change_request import ChangeRequest
 from app.models.document import DocumentVersion
 from app.models.issue import Issue
 from app.models.process_map import ProcessEdge, ProcessMapVersion, ProcessTask
+from app.models.review_session import DraftChangeItem, ReviewSession
 from app.models.validation import ValidationCase
-from app.pipeline.versioning import ChangeApplyError, apply_change
+from app.pipeline.review_session import consolidate_transcript, get_or_create_open_session
+from app.pipeline.versioning import ChangeApplyError, ChangeSetItemInput, apply_change, apply_change_set
 from app.schemas import (
     ChangeRequestDecisionIn,
     ChangeRequestOut,
@@ -22,12 +24,17 @@ from app.schemas import (
     ChatResponse,
     ChatSource,
     CitationOut,
+    ConfirmResultOut,
+    ConsolidateRequestIn,
     DocumentOut,
+    DraftChangeItemOut,
+    DraftItemUpdateIn,
     EdgeOut,
     IssueFeedbackIn,
     IssueOut,
     ProcessMapOut,
     ProcessMapVersionOut,
+    ReviewSessionOut,
     TaskOut,
     ValidationCaseOut,
 )
@@ -292,3 +299,189 @@ def chat(req: ChatRequest, db: Session = Depends(get_db)):
         answer=answer, mode=mode, sources=sources,
         change_request_id=change_request.id if change_request else None,
     )
+
+
+def _draft_item_out(item: DraftChangeItem) -> DraftChangeItemOut:
+    return DraftChangeItemOut(
+        id=item.id, session_id=item.session_id, change_type=item.change_type,
+        proposed_change=json.loads(item.proposed_change or "{}"), rationale=item.rationale,
+        source_message_refs=json.loads(item.source_message_refs or "[]"), status=item.status,
+        superseded_by_item_id=item.superseded_by_item_id, human_override=item.human_override,
+        created_at=item.created_at, updated_at=item.updated_at,
+    )
+
+
+def _review_session_out(db: Session, session: ReviewSession) -> ReviewSessionOut:
+    items = db.query(DraftChangeItem).filter_by(session_id=session.id).order_by(DraftChangeItem.created_at).all()
+    return ReviewSessionOut(
+        id=session.id, document_id=session.document_id, base_process_map_id=session.base_process_map_id,
+        status=session.status, created_at=session.created_at, confirmed_at=session.confirmed_at,
+        resulting_process_map_id=session.resulting_process_map_id,
+        items=[_draft_item_out(i) for i in items],
+    )
+
+
+@router.get("/documents/{document_id}/review-sessions/current", response_model=ReviewSessionOut | None)
+def get_current_review_session(document_id: str, db: Session = Depends(get_db)):
+    session = (
+        db.query(ReviewSession)
+        .filter_by(document_id=document_id)
+        .filter(ReviewSession.status.in_(["open", "reconciled"]))
+        .order_by(ReviewSession.created_at.desc())
+        .first()
+    )
+    if session is None:
+        return None
+    return _review_session_out(db, session)
+
+
+@router.post("/documents/{document_id}/review-sessions/consolidate", response_model=ReviewSessionOut)
+def consolidate_review_session(document_id: str, body: ConsolidateRequestIn, db: Session = Depends(get_db)):
+    """The 'Review & Apply Changes' button. Runs the reconciliation pass over
+    the supplied transcript (see app/pipeline/review_session.py) and returns
+    the consolidated, still-editable draft item list for the BPA to confirm.
+    Applies NOTHING to the process map — that only happens via /confirm."""
+    doc = db.query(DocumentVersion).filter_by(id=document_id).first()
+    if doc is None:
+        raise HTTPException(404, f"Unknown document_id {document_id}")
+
+    try:
+        session = get_or_create_open_session(db, document_id)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+
+    transcript = [t.model_dump() for t in body.transcript]
+    consolidate_transcript(db, session, transcript)
+    db.commit()
+    db.refresh(session)
+    return _review_session_out(db, session)
+
+
+@router.patch("/documents/{document_id}/review-sessions/{session_id}/items/{item_id}", response_model=DraftChangeItemOut)
+def update_draft_item(document_id: str, session_id: str, item_id: str, body: DraftItemUpdateIn, db: Session = Depends(get_db)):
+    """The item-level dispute loop: approve / reject / edit wording / mark
+    needs_clarification. A BPA edit to change_type/proposed_change/rationale
+    is tagged human_override=True — distinct from LLM-derived content, per the
+    'review-gaming' pitfall named in the design debate (a freely-editable
+    confirm list must not silently launder ungrounded human edits as if they
+    were still transcript-derived)."""
+    item = (
+        db.query(DraftChangeItem)
+        .join(ReviewSession)
+        .filter(DraftChangeItem.id == item_id, DraftChangeItem.session_id == session_id, ReviewSession.document_id == document_id)
+        .first()
+    )
+    if item is None:
+        raise HTTPException(404, f"No draft item {item_id} in session {session_id} for document {document_id}")
+
+    edited_content = False
+    if body.status is not None:
+        valid = {"draft", "approved", "rejected", "needs_clarification"}
+        if body.status not in valid:
+            raise HTTPException(400, f"status must be one of {sorted(valid)}")
+        item.status = body.status
+    if body.change_type is not None:
+        item.change_type = body.change_type
+        edited_content = True
+    if body.proposed_change is not None:
+        item.proposed_change = json.dumps(body.proposed_change)
+        edited_content = True
+    if body.rationale is not None:
+        item.rationale = body.rationale
+        edited_content = True
+    if edited_content:
+        item.human_override = True
+
+    db.commit()
+    db.refresh(item)
+    return _draft_item_out(item)
+
+
+@router.post("/documents/{document_id}/review-sessions/{session_id}/confirm", response_model=ConfirmResultOut)
+def confirm_review_session(document_id: str, session_id: str, db: Session = Depends(get_db)):
+    """Applies every item with status=approved as ONE new process-map
+    version. Nothing else (draft/rejected/needs_clarification items) is
+    applied. If HEAD has moved since the session's base version was pinned
+    (e.g. another change was approved via the per-message ChangeRequest path
+    in the meantime), refuses and asks for a re-consolidation against current
+    HEAD rather than applying against a stale base."""
+    session = db.query(ReviewSession).filter_by(id=session_id, document_id=document_id).first()
+    if session is None:
+        raise HTTPException(404, f"No review session {session_id} for document {document_id}")
+    if session.status not in ("open", "reconciled"):
+        raise HTTPException(400, f"Session is already {session.status}")
+
+    current_head = (
+        db.query(ProcessMapVersion)
+        .filter_by(document_id=document_id)
+        .order_by(ProcessMapVersion.created_at.desc())
+        .first()
+    )
+    if current_head is None or current_head.id != session.base_process_map_id:
+        raise HTTPException(
+            409,
+            "The process map has changed since this review session started — "
+            "re-run 'Review & Apply Changes' to consolidate against the current version before confirming.",
+        )
+
+    approved = (
+        db.query(DraftChangeItem)
+        .filter_by(session_id=session.id, status="approved")
+        .order_by(DraftChangeItem.created_at)
+        .all()
+    )
+    if not approved:
+        raise HTTPException(400, "No approved items to apply — approve at least one item first")
+
+    items_input = [
+        ChangeSetItemInput(item_id=it.id, change_type=it.change_type, payload=json.loads(it.proposed_change or "{}"))
+        for it in approved
+    ]
+
+    try:
+        result = apply_change_set(db, document_id, current_head, items_input, changed_by="bpa via review session")
+    except ChangeApplyError as e:
+        failing = db.query(DraftChangeItem).filter_by(id=e.item_id).first() if e.item_id else None
+        if failing:
+            failing.status = "apply_failed"
+            db.commit()
+        return ConfirmResultOut(success=False, failed_item_id=e.item_id, error=str(e))
+
+    for it in approved:
+        it.status = "applied"
+    session.status = "confirmed"
+    session.confirmed_at = dt.datetime.utcnow()
+    session.resulting_process_map_id = result.new_version.id
+    result.new_version.change_request_id = session.id
+    db.commit()
+    db.refresh(result.new_version)
+
+    versions = (
+        db.query(ProcessMapVersion)
+        .filter_by(document_id=document_id)
+        .order_by(ProcessMapVersion.created_at.desc())
+        .all()
+    )
+    current_id = versions[0].id if versions else None
+
+    return ConfirmResultOut(
+        success=True,
+        new_version=ProcessMapVersionOut(
+            id=result.new_version.id, version_label=result.new_version.version_label,
+            status=result.new_version.status, change_summary=result.new_version.change_summary,
+            changed_by=result.new_version.changed_by, created_at=result.new_version.created_at,
+            is_current=(result.new_version.id == current_id),
+        ),
+        change_summaries=result.change_summaries,
+    )
+
+
+@router.post("/documents/{document_id}/review-sessions/{session_id}/discard", response_model=ReviewSessionOut)
+def discard_review_session(document_id: str, session_id: str, db: Session = Depends(get_db)):
+    session = db.query(ReviewSession).filter_by(id=session_id, document_id=document_id).first()
+    if session is None:
+        raise HTTPException(404, f"No review session {session_id} for document {document_id}")
+    session.status = "discarded"
+    db.commit()
+    db.refresh(session)
+    return _review_session_out(db, session)
