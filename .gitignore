@@ -1,0 +1,25 @@
+# Python
+backend/.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# SQLite dev databases (recreated + reseeded on startup)
+*.db
+*.db-journal
+
+# Node / frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Env files (never commit secrets)
+.env
+.env.local
+backend/.env
+
+# OS cruft
+.DS_Store
+
+# Logs
+*.log

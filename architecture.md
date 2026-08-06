@@ -1,0 +1,138 @@
+# Architecture — Process Printer
+
+Status: living document, updated as the build progresses. See `PROGRESS.md` for
+task-by-task status and `../DECISIONS.md` for anything promoted to the parent
+ways-of-working repo.
+
+## What this is
+
+Given a policy-type document (or set of documents), extract a **task-level process
+map** and per-task descriptions that a claims handler or Business Process Analyst
+(BPA) can use to understand and (manually, for now) apply the coverage-determination
+process — with every task traceable back to the source document on click, plus a
+logged list of gaps/ambiguities the document doesn't resolve.
+
+**Explicitly out of scope**: building or running an automated claim-decisioning
+agent/execution engine. This tool produces the map and descriptions for human
+review — it does not decide claims.
+
+## Stack decisions
+
+| Layer | Choice | Why | Alternatives considered |
+|---|---|---|---|
+| Backend language | Python 3.11 (via `/opt/homebrew/bin/python3.11`) | User requirement. System default `python3` resolved to 3.8.8 (anaconda), too old for modern typed FastAPI/Pydantic v2 usage — 3.11 was available via Homebrew | Anaconda's 3.8 — rejected, EOL-adjacent and lacks modern typing features |
+| Backend framework | FastAPI + Pydantic | Typed request/response models double as API docs; async-friendly for LLM calls | Flask (less structure), Django (too heavy for this scope) |
+| Persistence | SQLite via SQLAlchemy (dev); schema written to be swappable to Postgres | Zero external services needed to run locally; SQLAlchemy models are the migration path to Postgres later without a rewrite | Flat JSON files (rejected — provenance/evidence tables need real joins, see `provenance.md`'s explicit warning against flattening evidence into arrays) |
+| PDF parsing | PyMuPDF (`fitz`) | Gives page number + bounding box per text span, which is the citation primitive everything else depends on | pdfplumber (weaker table handling), unstructured.io (heavier dependency for what we need) |
+| Extraction "brain" | Pluggable LLM client interface, real implementation targets Anthropic's API via `ANTHROPIC_API_KEY` | Keeps the pipeline generic across future documents (user requirement: swap document, re-run, works generically) | Hard-coding a one-off script for the AAMI PDS only — rejected, fails the generic-pipeline requirement |
+| Frontend | React + TypeScript + Vite | User requirement (React); Vite for fast local iteration | Next.js (unneeded SSR complexity for an internal tool) |
+| Styling / components | Tailwind CSS + a small hand-built component set (shadcn/ui patterns, not the full library dependency) | Clean, consistent, "sophisticated" look without a heavy design-system dependency | MUI (heavier, more opinionated visual style than requested) |
+| Process map rendering | React Flow | Purpose-built for DAG/node-edge rendering with click interactions, which is exactly the citation-on-click requirement | Custom SVG (more work, no benefit here) |
+| Backend tests | pytest | Python default | |
+| Frontend tests | Vitest + React Testing Library | Vite-native, fast | Jest (works but redundant given Vite) |
+
+## Known constraint (disclosed, not fabricated)
+
+This build environment has no `ANTHROPIC_API_KEY` set. The extraction pipeline
+(`backend/app/pipeline/extraction.py`) is written against a real LLM client
+interface so it works generically once a key is supplied. For the first proof run
+against the AAMI Comprehensive Car Insurance PDS, the extraction pass was performed
+directly by the building agent (reading the PDF, producing the same schema the
+pipeline would) rather than by a live model call — every record produced this way is
+tagged `extractor_version: manual-agent-pass-v1` so it's never confused with an
+automated-pipeline run. See `PROGRESS.md` notes.
+
+## Data model (see `backend/app/models/`)
+
+- `DocumentVersion` — one row per uploaded document/version
+- `SourceSpan` — page/section/bbox-anchored text extracted from a document; the
+  citation primitive
+- `AtomicClaim` — a single extracted rule/condition/exception, linked to its
+  `SourceSpan`(s)
+- `ProcessTask` — a node in the process map (task-level, not clause-level)
+- `ProcessEdge` — a transition between tasks, with a condition
+- `Issue` — a gap or ambiguity, linked to the claims/tasks it affects
+- `ValidationCase` — a traced claim scenario with its expected/actual outcome
+
+Provenance follows `practices/provenance.md`: evidence is its own linked
+record, never a flattened array field, so "why does this task say that" is always
+answerable by following a link, not by trusting prose.
+
+## API surface (implemented)
+
+FastAPI, prefix `/api`:
+- `GET /documents` — list ingested documents
+- `GET /documents/{id}/process-map` — tasks + edges, each task's citations resolved
+  from `claim_refs` (JSON list of claim ids) into full `Citation` objects
+- `GET /documents/{id}/issues` — logged gaps/ambiguities with resolved citations
+- `GET /documents/{id}/validation-cases` — traced scenarios with pass/fail
+- `POST /chat` — `{document_id, message}` → grounded answer + sources; `mode` field
+  (`retrieval_only` | `llm_grounded`) tells the caller honestly which path answered
+
+On startup, the app seeds the AAMI document automatically (`init_db()` +
+`seed_aami()`) so there's something to see without a manual upload step — a real
+upload endpoint (parse a NEW document through the same pipeline) is the natural
+next increment but wasn't required for this pass; see "What's next" below.
+
+## Frontend structure (implemented)
+
+`App.tsx` loads documents/process-map/issues/validation-cases once, then switches
+between four tabs without refetching: **Process map** (React Flow canvas +
+click-to-expand task detail panel with citations), **Gaps & ambiguities**, **Test
+scenarios**, **Ask a question** (chat). All data comes from the API layer above —
+no client-side re-derivation of process logic, matching the "chatbot answers from
+the validated graph, not raw documents" principle from the original design
+discussion.
+
+## Open decisions log
+
+Entries follow `practices/decision-log.md` format. Newest first.
+
+### Test-isolation strategy: singleton Base/models, swap engine per test
+**Date:** this build.
+**Decision:** `database.use_test_db()` rebinds the module-level SQLAlchemy engine
+and calls `drop_all`+`create_all` against the *existing* `Base.metadata`, rather
+than deleting model modules from `sys.modules` and re-importing them fresh per test.
+**Why:** the sys.modules-deletion approach caused a real bug — `app.seed`'s
+functions, imported once at pytest collection time, kept referencing the first
+`Base`'s model classes, while the fixture created a second `Base` and mapped tables
+under it. SQLAlchemy happily built INSERT statements from the first (never-created)
+mapper, silently dropping columns that happened to differ between what the engine's
+tables actually had and what the stale class thought they had. See
+`docs/evidence/08-backend-api-and-seed.md` for the full trace.
+**Alternatives considered:** per-test in-memory SQLite (`:memory:`) — rejected,
+still needs a fresh engine per test since SQLite in-memory DBs are connection-scoped,
+doesn't remove the double-Base risk on its own. Full pytest-xdist process isolation
+— rejected as overkill for this project's size.
+**Revisit if:** the model layer grows enough that `drop_all`/`create_all` per test
+becomes a real time cost — a savepoint-and-rollback-per-test pattern would be the
+next step.
+
+### Manual-agent-pass extraction instead of waiting for an API key
+**Date:** this build.
+**Decision:** Ran claim extraction for the AAMI PDS directly (the building agent
+reading parsed spans and producing the same schema an LLM call would), rather than
+blocking the whole build on an `ANTHROPIC_API_KEY` not being available in this
+sandbox.
+**Why:** the user asked to see the approach proven on the real document now, with
+the pipeline built generically for future documents. Blocking on a key would have
+meant no proof at all versus a proof clearly labeled as a substitute for the
+automated path (`extractor_version: manual-agent-pass-v1` on every affected row).
+**Alternatives considered:** ship only the pipeline scaffolding with synthetic
+placeholder data — rejected per the user's explicit "verify individual cases"
+requirement, which needs real content, not placeholders.
+**Revisit if:** an API key becomes available — re-run `extraction.py`'s
+`AnthropicLLMClient` path and compare its output against the manual pass as a
+sanity check before trusting it for a new document.
+
+## What's next (named, not silently deferred)
+
+- Real file-upload endpoint wired to the same ingest→extract→synthesize pipeline,
+  for a genuinely new document (the pipeline is generic; only the upload/trigger
+  endpoint is missing)
+- Close the additional-covers extraction gap logged in the issue log (task t9)
+- Swap in the automated `AnthropicLLMClient` extraction path once a key is
+  available, and diff its output against the manual-pass baseline
+- Real browser visual verification (this sandbox couldn't navigate to localhost —
+  see `docs/evidence/10-12-frontend.md`)
+- Postgres migration if this moves beyond a single local reviewer's use

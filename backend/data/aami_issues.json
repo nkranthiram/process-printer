@@ -1,0 +1,51 @@
+[
+  {
+    "issue_type": "gap",
+    "title": "No explicit claim-lodgement time limit found",
+    "description": "The extracted sections (Making a claim, general policyholder duties) describe how to lodge a claim and what to tell AAMI about changes to circumstances 'as soon as possible', but no explicit deadline (e.g. '30 days from the incident') for lodging a claim itself was found in the sections extracted for this pass. A late-lodged claim's handling isn't determinable from the extracted claims alone.",
+    "process_task_id": "t1",
+    "claim_refs": ["claim_evidence"]
+  },
+  {
+    "issue_type": "ambiguity",
+    "title": "\"Reasonable distance\" for hire car provider availability is undefined",
+    "description": "Several additional-cover clauses (hire car after theft, hire car after not-at-fault incident, hire car after an event) condition the benefit on a provider being available 'within a reasonable distance' of the policyholder's location. The PDS doesn't define what counts as reasonable — this is a genuine judgment call for the handler, not a document gap that further reading would resolve.",
+    "process_task_id": "t9",
+    "claim_refs": ["hire_car_after_theft"]
+  },
+  {
+    "issue_type": "ambiguity",
+    "title": "Unlicensed-driver exception turns on the owner's subjective knowledge",
+    "description": "The owner can still claim (though the driver cannot) if they can show they 'did not know and could not have reasonably known' the driver was unlicensed or breaching licence conditions. Whether a given set of facts meets this bar is a judgment call the document leaves to the claims handler — flagged rather than resolved by this process map.",
+    "process_task_id": "t3",
+    "claim_refs": ["unlicensed_driver"]
+  },
+  {
+    "issue_type": "ambiguity",
+    "title": "\"Not aware further damage could occur\" exception is subjective",
+    "description": "Driving a car after it's been damaged is excluded unless the driver 'was not aware this could lead to further damage' or was acting to prevent further loss. Awareness is a state of mind the document gives no objective test for — a genuine judgment call, not a gap that more document detail would close.",
+    "process_task_id": "t3",
+    "claim_refs": ["unsafe_continued_driving"]
+  },
+  {
+    "issue_type": "ambiguity",
+    "title": "\"Reckless act\" examples are illustrative, not an exhaustive list",
+    "description": "The reckless-driving exclusion lists examples (street racing, burnouts, donuts, driving into water, illegal mobile phone use, excessive speed) introduced with 'such as' — meaning conduct not on the list can still qualify as reckless, and conduct resembling the list may or may not, depending on facts. Classifying a specific claim description against this exclusion requires judgment the document doesn't fully constrain.",
+    "process_task_id": "t3",
+    "claim_refs": ["reckless_driving"]
+  },
+  {
+    "issue_type": "gap",
+    "title": "No stated precedence when a general exclusion and a specific-cover inclusion appear to conflict",
+    "description": "The document doesn't explicitly state which governs when a claim would otherwise be covered under a specific benefit (e.g. Windscreen and window glass) but also arguably triggers a general exclusion (e.g. reckless driving). The process map currently checks general exclusions first as a structural choice (task ordering), but this ordering is a modelling decision, not something the PDS states outright — worth confirming with a human reviewer rather than treating as settled.",
+    "process_task_id": "t3",
+    "claim_refs": []
+  },
+  {
+    "issue_type": "gap",
+    "title": "Additional/optional covers only partially claim-backed",
+    "description": "Task t9 covers transport cover, new car after total loss, and hire car after theft with real extracted claims. Towing and storage costs, hire car after a not-at-fault incident, trailer cover, hire car after an event (unlimited days), and AAMI Roadside Assist are named in the task description but were not extracted into claims in this pass — scoped out to keep the first extraction pass focused on core coverage determination (see skills/claim-extraction/SKILL.md's scoping rule). A follow-up extraction pass should close this out before the map is treated as covering the full breadth of the policy.",
+    "process_task_id": "t9",
+    "claim_refs": []
+  }
+]

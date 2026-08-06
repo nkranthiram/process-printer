@@ -1,0 +1,9 @@
+anthropic==0.120.2
+fastapi==0.141.1
+httpx==0.28.1
+pydantic==2.13.4
+pydantic_core==2.46.4
+pymupdf==1.28.0
+pytest==9.1.1
+SQLAlchemy==2.0.51
+uvicorn==0.52.1

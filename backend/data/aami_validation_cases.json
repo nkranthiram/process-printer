@@ -1,0 +1,47 @@
+[
+  {
+    "scenario_name": "Chipped windscreen, safely repairable, first claim this period",
+    "claim_description": "Policyholder's windscreen was chipped (not cracked) by a stone on the highway. No other damage to the car. This is their first windscreen claim this period of insurance.",
+    "expected_outcome": "Covered under Windscreen and window glass cover, repaired, no excess payable and the one excess-free claim for the period is not used up (chip repair is explicitly excluded from that count).",
+    "traced_path": ["t1", "t2", "t3", "t4", "t5", "t6", "t7", "t8", "t9", "t10"],
+    "actual_outcome": "Covered under Windscreen and window glass cover. t3: no general exclusion applies. t4: classified as windscreen-only damage. t5: chip repair condition applies — no excess, doesn't use the one excess-free claim. t6: incident easily evidenced (chip visible). t7: no other excess applies to this benefit specifically. t8: repair, not total loss. t9: no additional covers relevant. t10: Covered, $0 excess.",
+    "result": "pass",
+    "notes": "Matches claim subjects windscreen_cover and windscreen_chip_repair (page 42)."
+  },
+  {
+    "scenario_name": "Driver over the legal alcohol limit causes a single-vehicle crash",
+    "claim_description": "Policyholder was driving home from a party, was breath-tested at the scene and was over the legal alcohol limit, and crashed into a fence. The car was not stolen and there's no suggestion alcohol wasn't a contributing factor.",
+    "expected_outcome": "Not covered — driver-impairment general exclusion applies, no exception available (car wasn't stolen, and impairment plausibly contributed).",
+    "traced_path": ["t1", "t2", "t3", "t10"],
+    "actual_outcome": "Not covered. t3: driver_impairment exclusion applies — over the legal limit, no stolen-car exception, no evidence impairment wasn't a contributing factor — routes straight to t10 as a clear exclusion.",
+    "result": "pass",
+    "notes": "Matches claim subject driver_impairment (page 18)."
+  },
+  {
+    "scenario_name": "Rear-ended at a red light, not at fault, full at-fault details supplied",
+    "claim_description": "Policyholder's car was hit from behind while stopped at a red light. They have the other driver's name, address, and vehicle registration number, and were not at fault.",
+    "expected_outcome": "Covered under Accidental loss or damage, standard excess waived (all three not-at-fault conditions met), eligible for 'Hire car after a not at fault incident' additional cover.",
+    "traced_path": ["t1", "t2", "t3", "t4", "t5", "t6", "t7", "t8", "t9", "t10"],
+    "actual_outcome": "Covered. t3: no general exclusion (not impaired, not reckless, licensed, registered). t4: classified as Accidental loss or damage (collision). t5: no cover-specific exclusion. t6: incident evidenced (at-fault driver's details known). t7: not-at-fault with all 3 details supplied — excess waived ($0). t8: repairable, not a total loss. t9: hire-car-after-not-at-fault-incident is one of the additional covers not yet claim-backed in this pass (flagged in the issue log) — noted as a gap for this specific scenario, not blocking the coverage decision itself. t10: Covered, $0 excess.",
+    "result": "pass",
+    "notes": "Mirrors the PDS's own worked example on page 60 (rear-end, not-at-fault, $0 excess) — used deliberately so the trace can be checked against the document's own numbers, not just against the map's internal logic. Confirms the map's outcome and reasoning line up with AAMI's own settlement example."
+  },
+  {
+    "scenario_name": "Car left unattended, unlocked, keys inside, stolen from a shopping centre car park",
+    "claim_description": "Policyholder left their car in a shopping centre car park, unlocked, with the keys in the ignition, while they went inside. The car was stolen.",
+    "expected_outcome": "Not covered — theft-from-unattended-unlocked-car-with-keys general exclusion applies directly, no stated exception.",
+    "traced_path": ["t1", "t2", "t3", "t10"],
+    "actual_outcome": "Not covered. t3: unattended_unlocked_keys_in_car exclusion applies with no exception in the extracted claim — routes straight to t10 as a clear exclusion.",
+    "result": "pass",
+    "notes": "Matches claim subject unattended_unlocked_keys_in_car (page 22)."
+  },
+  {
+    "scenario_name": "Driver was using a mobile phone illegally at the time of a single-vehicle crash",
+    "claim_description": "Policyholder was driving and using their mobile phone illegally (holding it, texting) when they lost control on a bend and hit a guard rail. No other vehicle involved.",
+    "expected_outcome": "Cannot be resolved to a clean decision from the document alone — the reckless-act exclusion names illegal mobile phone use as an example, but whether THIS specific incident (loss of control on a bend) was actually caused by the phone use, versus an unrelated driving error, is a factual judgment the PDS doesn't provide a test for. Should escalate to human review rather than auto-deciding either way.",
+    "traced_path": ["t1", "t2", "t3", "t6", "t11"],
+    "actual_outcome": "Escalated to manual review. t3: illegal mobile phone use matches a reckless-act example, but causation between the phone use and the loss of control isn't established by the claim description alone — this is exactly the ambiguity logged in the issue log ('reckless act examples are illustrative, not exhaustive/self-applying'). Routed to t6 (evidence check) rather than straight to a decision; since the evidence needed to establish causation isn't available from the description alone, t6 escalates to t11 (human review) rather than the process guessing.",
+    "result": "pass",
+    "notes": "This is the escalation-path scenario per the skill's contract (don't only test happy paths). Matches claim subject reckless_driving (page 21) and the related logged ambiguity."
+  }
+]
