@@ -15,6 +15,7 @@ describe('ChatPanel', () => {
       sources: [
         { task_id: 't5', task_title: 'Check cover-specific conditions', claim_id: 'c9', subject: 'windscreen_cover', page: 42, raw_quote: 'quote text' },
       ],
+      change_request_id: null,
     })
 
     render(<ChatPanel documentId="doc-1" />)

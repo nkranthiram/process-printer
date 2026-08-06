@@ -67,6 +67,14 @@ class IssueOut(BaseModel):
     status: str
     process_task_id: str | None
     claim_refs: list[CitationOut]
+    bpa_feedback: str | None = None
+    resolution_notes: str | None = None
+
+
+class IssueFeedbackIn(BaseModel):
+    bpa_feedback: str | None = None
+    status: str | None = None  # open | pending_review | resolved | deferred
+    resolution_notes: str | None = None
 
 
 class ValidationCaseOut(BaseModel):
@@ -96,5 +104,35 @@ class ChatSource(BaseModel):
 
 class ChatResponse(BaseModel):
     answer: str
-    mode: str  # "retrieval_only" (no LLM key) | "llm_grounded"
+    mode: str  # retrieval_only | llm_grounded | out_of_scope | change_request_logged
     sources: list[ChatSource]
+    change_request_id: str | None = None
+
+
+class ChangeRequestOut(BaseModel):
+    id: str
+    document_id: str
+    source: str
+    request_text: str
+    change_type: str
+    proposed_change: dict
+    rationale: str | None
+    status: str
+    decision_notes: str | None
+    resulting_process_map_id: str | None
+    created_at: dt.datetime
+    decided_at: dt.datetime | None
+
+
+class ChangeRequestDecisionIn(BaseModel):
+    decision_notes: str | None = None
+
+
+class ProcessMapVersionOut(BaseModel):
+    id: str
+    version_label: str
+    status: str
+    change_summary: str | None
+    changed_by: str | None
+    created_at: dt.datetime
+    is_current: bool

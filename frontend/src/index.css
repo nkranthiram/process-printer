@@ -9,13 +9,16 @@ html, body, #root {
 }
 
 body {
-  @apply bg-slate-950 text-slate-100 antialiased;
+  /* A clean, light neutral background (inspired by Apple/Google product UI) —
+     not pure white, which reads harsh next to white cards; a very soft
+     blue-tinted gray instead, easy on the eyes for long review sessions. */
+  @apply bg-slate-50 text-slate-800 antialiased;
   font-family: var(--font-sans);
 }
 
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: #334155; border-radius: 6px; }
-::-webkit-scrollbar-thumb:hover { background: #475569; }
+::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 6px; }
+::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
 
 .react-flow__attribution { display: none; }

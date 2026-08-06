@@ -63,9 +63,36 @@ export interface Issue {
   issue_type: 'gap' | 'ambiguity' | 'low_confidence_extraction'
   title: string
   description: string
-  status: string
+  status: 'open' | 'pending_review' | 'resolved' | 'deferred'
   process_task_id: string | null
   claim_refs: Citation[]
+  bpa_feedback: string | null
+  resolution_notes: string | null
+}
+
+export interface ChangeRequest {
+  id: string
+  document_id: string
+  source: string
+  request_text: string
+  change_type: 'add_task' | 'remove_task' | 'modify_task' | 'modify_edge' | 'unclear'
+  proposed_change: Record<string, unknown>
+  rationale: string | null
+  status: 'pending' | 'approved' | 'rejected' | 'apply_failed'
+  decision_notes: string | null
+  resulting_process_map_id: string | null
+  created_at: string
+  decided_at: string | null
+}
+
+export interface ProcessMapVersionSummary {
+  id: string
+  version_label: string
+  status: string
+  change_summary: string | null
+  changed_by: string | null
+  created_at: string
+  is_current: boolean
 }
 
 export interface ChatSource {
@@ -79,8 +106,9 @@ export interface ChatSource {
 
 export interface ChatResponse {
   answer: string
-  mode: 'retrieval_only' | 'llm_grounded'
+  mode: 'retrieval_only' | 'llm_grounded' | 'out_of_scope' | 'change_request_logged'
   sources: ChatSource[]
+  change_request_id: string | null
 }
 
 export interface ValidationCase {
@@ -126,6 +154,50 @@ export async function sendChat(documentId: string, message: string): Promise<Cha
   })
   if (!res.ok) {
     throw new Error(`POST /api/chat failed: ${res.status} ${await res.text()}`)
+  }
+  return res.json()
+}
+
+export function listChangeRequests(documentId: string): Promise<ChangeRequest[]> {
+  return getJSON(`/api/documents/${documentId}/change-requests`)
+}
+
+export function listProcessMapVersions(documentId: string): Promise<ProcessMapVersionSummary[]> {
+  return getJSON(`/api/documents/${documentId}/process-map/versions`)
+}
+
+async function postJSON<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    throw new Error(`POST ${path} failed: ${res.status} ${await res.text()}`)
+  }
+  return res.json()
+}
+
+export function approveChangeRequest(documentId: string, crId: string, decisionNotes?: string): Promise<ChangeRequest> {
+  return postJSON(`/api/documents/${documentId}/change-requests/${crId}/approve`, { decision_notes: decisionNotes ?? null })
+}
+
+export function rejectChangeRequest(documentId: string, crId: string, decisionNotes?: string): Promise<ChangeRequest> {
+  return postJSON(`/api/documents/${documentId}/change-requests/${crId}/reject`, { decision_notes: decisionNotes ?? null })
+}
+
+export async function updateIssueFeedback(
+  documentId: string,
+  issueId: string,
+  body: { bpa_feedback?: string; status?: string; resolution_notes?: string },
+): Promise<Issue> {
+  const res = await fetch(`${API_BASE}/api/documents/${documentId}/issues/${issueId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    throw new Error(`PATCH issue failed: ${res.status} ${await res.text()}`)
   }
   return res.json()
 }

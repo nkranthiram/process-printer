@@ -27,6 +27,17 @@ class ProcessMapVersion(Base):
     status: Mapped[str] = mapped_column(String, nullable=False, default="draft")  # draft | validated
     created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.utcnow)
 
+    # What changed vs. the previous version, and who/what changed it — the whole
+    # point of never mutating a version in place. Null on the original build
+    # (v0-draft has no prior version to diff against).
+    change_summary: Mapped[str] = mapped_column(String, nullable=True)
+    changed_by: Mapped[str] = mapped_column(String, nullable=True)  # e.g. "bpa via chat feedback"
+    # Deliberately NOT a ForeignKey: ChangeRequest already points at the process
+    # map version it produced (resulting_process_map_id), and a real FK here
+    # would create a circular table dependency with change_requests.
+    # base_process_map_id. A plain string id is enough for display/lookup.
+    change_request_id: Mapped[str] = mapped_column(String, nullable=True)
+
     tasks: Mapped[list["ProcessTask"]] = relationship(back_populates="process_map", cascade="all, delete-orphan")
     edges: Mapped[list["ProcessEdge"]] = relationship(back_populates="process_map", cascade="all, delete-orphan")
 

@@ -31,5 +31,14 @@ class Issue(Base):
     title: Mapped[str] = mapped_column(String, nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False)
     claim_refs: Mapped[str] = mapped_column(Text, nullable=True)  # JSON list of AtomicClaim ids, if any
-    status: Mapped[str] = mapped_column(String, nullable=False, default="open")  # open | resolved | deferred
+    status: Mapped[str] = mapped_column(String, nullable=False, default="open")
+    # open | pending_review | resolved | deferred
     created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.utcnow)
+
+    # BPA feedback loop (see skills/gap-ambiguity-logging + FeedbackPanel UI):
+    # a BPA can leave a comment/proposed resolution without yet resolving the
+    # issue (status -> pending_review), then a reviewer resolves/defers it with
+    # a final note. Both are free text, never auto-applied to the process map.
+    bpa_feedback: Mapped[str] = mapped_column(Text, nullable=True)
+    resolution_notes: Mapped[str] = mapped_column(Text, nullable=True)
+    updated_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.utcnow, onupdate=dt.datetime.utcnow)

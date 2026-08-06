@@ -125,6 +125,78 @@ requirement, which needs real content, not placeholders.
 `AnthropicLLMClient` path and compare its output against the manual pass as a
 sanity check before trusting it for a new document.
 
+### Process map versioning: clone-on-change, never mutate in place
+**Date:** 2026-08-06 (tasks 22–28, UI overhaul + feedback loop).
+**Decision:** An approved `ChangeRequest` is applied by cloning the current
+`ProcessMapVersion`'s tasks/edges into a brand-new version row, applying exactly
+one structural mutation to the clone, re-validating with the same DAG structural
+checks used at build time (`synthesis.py`'s validator, reused not reimplemented),
+and only committing if still valid. The base version's rows are never touched.
+"Current" is simply the most recently created version for a document — no
+separate pointer/flag needed.
+**Why:** an auditable version history was an explicit requirement ("maintaining
+versions for these changes is also important"). Editing in place would make it
+impossible to answer "what did this look like before the BPA's change," and
+would risk a bad automated edit silently corrupting the live map with no
+rollback path.
+**A real bug this caught before it shipped:** `process_tasks.id` is a global
+primary key across every version, not scoped per `process_map_id` — the first
+implementation cloned tasks with their original ids, which collides with the
+still-existing row from the base version the moment a second version exists.
+Fixed by generating fresh ids for every task in a new version and rewriting
+edges through an id map. Proven red-before-green (see
+`docs/evidence/22-ui-overhaul-and-versioning.md`).
+**Alternatives considered:** a single mutable `ProcessTask`/`ProcessEdge` table
+with a separate append-only changelog — rejected because reconstructing "what
+did v1 actually look like" from a changelog is strictly more complex than just
+keeping the old rows, and the data volume (a handful of tasks per document) makes
+full cloning cheap.
+**Revisit if:** the task count per process map grows large enough that cloning
+the whole graph per change becomes wasteful — a delta/patch representation would
+be the next step, but isn't justified at this scale.
+
+### Chatbot scope enforcement: deterministic gate before any LLM call
+**Date:** 2026-08-06.
+**Decision:** `classify_intent()` in `app/chat.py` is plain regex classification
+that runs *before* retrieval or any LLM call. A message matching a coverage
+question pattern is refused immediately, in code — it never reaches an LLM
+prompt at all.
+**Why:** the user was explicit that this app must never answer coverage
+questions, only review/give feedback on the process map. A prompt-level
+instruction ("don't answer coverage questions") is not a hard guarantee — a
+sufficiently adversarial or oddly-phrased user message can talk a model around
+prompt-level instructions. A code-level gate that never constructs the LLM call
+in the first place is a stronger guarantee, and is unit-tested with a
+`monkeypatch` that makes `retrieve()` raise if it's ever invoked for a coverage
+question (see `test_chat_scope.py::test_coverage_question_never_reaches_retrieval_or_llm`).
+**Alternatives considered:** LLM-based intent classification only — rejected as
+the sole gate, since it reintroduces exactly the prompt-injection risk this is
+meant to close. (LLM assistance is still used, but only *after* the gate, for
+drafting a structured change-request payload from an already-classified
+`change_request` message.)
+**Revisit if:** regex classification proves too brittle against real BPA
+phrasing in practice — the fallback would be a small, cheap, deterministic-output
+classifier call that still runs *before* any context-bearing prompt, preserving
+the same guarantee.
+
+### Process map layout: recomputed client-side, not trusted from storage
+**Date:** 2026-08-06.
+**Decision:** `frontend/src/layout.ts` computes node positions from the live
+graph structure (longest-path rank + fixed generous spacing) on every render,
+rather than trusting the `position_x`/`position_y` values stored on each
+`ProcessTask` row.
+**Why:** the stored positions came from a coarse backend grid (task 5's
+`seed.py`) that didn't account for variable title length — this is what caused
+the reported text/box overlap. Recomputing client-side also means the layout
+self-heals automatically when a `ChangeRequest` adds or removes a task — no
+backend position math has to be kept in sync with graph edits.
+**Alternatives considered:** a full graph-layout library (e.g. `dagre`) —
+rejected for now to avoid a new dependency for a graph this small (≤15 nodes);
+the hand-rolled longest-path layering is a few dozen lines and fully covered by
+`layout.test.ts`. Revisit if process maps grow large/complex enough (wide
+fan-outs, many cross-links) that a real layout engine's cycle/crossing-
+minimization would matter.
+
 ## What's next (named, not silently deferred)
 
 - Real file-upload endpoint wired to the same ingest→extract→synthesize pipeline,
@@ -134,5 +206,11 @@ sanity check before trusting it for a new document.
 - Swap in the automated `AnthropicLLMClient` extraction path once a key is
   available, and diff its output against the manual-pass baseline
 - Real browser visual verification (this sandbox couldn't navigate to localhost —
-  see `docs/evidence/10-12-frontend.md`)
+  see `docs/evidence/10-12-frontend.md` and `docs/evidence/22-ui-overhaul-and-versioning.md`)
 - Postgres migration if this moves beyond a single local reviewer's use
+- Change-request retrieval quality: a vaguely-worded add/modify request can miss
+  the right anchor task and fall back to `unclear` — worth revisiting if this
+  becomes a common friction point (see `docs/evidence/22-ui-overhaul-and-versioning.md`)
+- `add_task`/`modify_task` change types are implemented in `versioning.py` but
+  not yet exercised by a live end-to-end run the way `remove_task` was — worth a
+  follow-up live check

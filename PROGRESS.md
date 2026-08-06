@@ -29,6 +29,13 @@ Legend: `todo` · `in_progress` · `blocked` · `done`
 | 19 | `text-ingestion` skill: plain-text (non-PDF) ingestion, generalizes `pdf-ingestion` | none (parallel to 20) | done (skill authored; module implementation not yet built/tested — see notes) | not yet run | `skills/text-ingestion/SKILL.md` |
 | 20 | `cross-document-reconciliation` skill: cluster + classify claims across 2+ documents (duplicate/contradiction/supersession/etc.) | none (parallel to 19) | done (skill authored; module implementation not yet built/tested — see notes) | not yet run | `skills/cross-document-reconciliation/SKILL.md` |
 | 21 | `process-printer` master skill: routes to all 8 stage skills, branch rules, cross-cutting non-negotiables | 19, 20 | done | n/a (routing doc, not code) | `skills/process-printer/SKILL.md`, `skills/RESOLVER.md` updated |
+| 22 | Light theme overhaul (frontend) | none | done | 30/30 frontend tests still pass, tsc clean, build clean | `docs/evidence/22-ui-overhaul-and-versioning.md` |
+| 23 | Process map layout fix: client-side layered auto-layout replaces cramped backend grid positions | none | done | 5/5 new layout.test.ts, red-before-green not needed (new logic, tests passed first run) | `frontend/src/layout.ts`, `frontend/src/layout.test.ts` |
+| 24 | Backend: `ChangeRequest` model + `versioning.py` (apply approved change as a new immutable `ProcessMapVersion`) | 22 (parallel) | done | 6/6 pytest, red-before-green proven on a real task-id-collision bug caught before running | `docs/evidence/22-ui-overhaul-and-versioning.md` |
+| 25 | Chatbot rescoped: refuses coverage questions (in code, before any LLM call), routes "explain" vs "change request" | 24 | done | 22 pytest (chat scope) + 68/68 full backend suite; red-before-green proven on a real classification gap | `docs/evidence/22-ui-overhaul-and-versioning.md` |
+| 26 | API: change-request approve/reject, issue PATCH feedback endpoint, process-map version history endpoint | 24, 25 | done | 68/68 backend suite (incl. 6 new live-HTTP tests) | `docs/evidence/22-ui-overhaul-and-versioning.md` |
+| 27 | Frontend: FeedbackPanel (issue BPA feedback/resolve) + ChangeRequestsPanel (approve/reject) + version history badge | 22, 26 | done | 30/30 frontend tests (5 new IssuesPanel, 5 new ChangeRequestsPanel, App.test.tsx updated) | `docs/evidence/22-ui-overhaul-and-versioning.md` |
+| 28 | Live end-to-end verification against the real running app + real LLM key | 22-27 | done | manual curl walkthrough: coverage question refused, change request drafted+approved live creating v2 with a task genuinely removed, issue feedback PATCH confirmed | `docs/evidence/22-ui-overhaul-and-versioning.md` |
 
 ## Notes / constraints on record
 

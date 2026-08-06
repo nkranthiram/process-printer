@@ -11,6 +11,13 @@ interface Turn {
   response?: ChatResponse
 }
 
+const MODE_LABEL: Record<string, { label: string; className: string }> = {
+  retrieval_only: { label: 'Retrieval-only (no LLM key configured)', className: 'text-slate-400' },
+  llm_grounded: { label: 'LLM-grounded', className: 'text-slate-400' },
+  out_of_scope: { label: 'Out of scope for this tool', className: 'text-amber-600' },
+  change_request_logged: { label: 'Logged as a pending change request', className: 'text-blue-600 font-medium' },
+}
+
 export default function ChatPanel({ documentId }: Props) {
   const [input, setInput] = useState('')
   const [turns, setTurns] = useState<Turn[]>([])
@@ -39,19 +46,26 @@ export default function ChatPanel({ documentId }: Props) {
 
   return (
     <div className="flex h-full flex-col" data-testid="chat-panel">
+      <div className="border-b border-slate-100 bg-blue-50/60 px-5 py-3">
+        <p className="text-xs text-blue-900">
+          This chat is for reviewing and giving feedback on the <strong>process map</strong> —
+          ask why a step is there, or say what you&rsquo;d like added, removed, or
+          changed. It won&rsquo;t answer coverage questions; that&rsquo;s not what this tool is for.
+        </p>
+      </div>
       <div className="flex-1 space-y-3 overflow-y-auto px-5 py-4">
         {turns.length === 0 && (
-          <p className="text-sm text-slate-500">
-            Ask about the process — e.g. &ldquo;Is a cracked windscreen covered?&rdquo; or
-            &ldquo;What excess applies if I wasn&rsquo;t at fault?&rdquo;
+          <p className="text-sm text-slate-400">
+            Try &ldquo;Why is the exclusions check before the excess step?&rdquo; or
+            &ldquo;Add a step to verify the incident date.&rdquo;
           </p>
         )}
         {turns.map((turn, i) => (
           <div key={i} className={turn.role === 'user' ? 'text-right' : 'text-left'}>
             <div
               className={[
-                'inline-block max-w-[90%] rounded-xl px-3 py-2 text-sm whitespace-pre-line text-left',
-                turn.role === 'user' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-200',
+                'inline-block max-w-[90%] rounded-2xl px-3.5 py-2 text-sm whitespace-pre-line text-left',
+                turn.role === 'user' ? 'bg-blue-600 text-white' : 'bg-white border border-slate-200 text-slate-700 shadow-sm',
               ].join(' ')}
             >
               {turn.text}
@@ -65,7 +79,7 @@ export default function ChatPanel({ documentId }: Props) {
                     <span
                       key={s.claim_id}
                       title={s.raw_quote ?? ''}
-                      className="rounded-full border border-slate-700 bg-slate-900 px-2 py-0.5 text-[10px] text-slate-400"
+                      className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[10px] text-slate-500"
                     >
                       p.{s.page} · {s.subject}
                     </span>
@@ -73,27 +87,27 @@ export default function ChatPanel({ documentId }: Props) {
               </div>
             )}
             {turn.response && (
-              <div className="mt-1 text-[10px] text-slate-600">
-                {turn.response.mode === 'retrieval_only' ? 'Retrieval-only (no LLM key configured)' : 'LLM-grounded'}
+              <div className={`mt-1 text-[10px] ${MODE_LABEL[turn.response.mode]?.className ?? 'text-slate-400'}`}>
+                {MODE_LABEL[turn.response.mode]?.label ?? turn.response.mode}
               </div>
             )}
           </div>
         ))}
-        {loading && <div className="text-xs text-slate-500">Thinking…</div>}
-        {error && <div className="text-xs text-rose-400">{error}</div>}
+        {loading && <div className="text-xs text-slate-400">Thinking…</div>}
+        {error && <div className="text-xs text-rose-600">{error}</div>}
       </div>
-      <form onSubmit={handleSubmit} className="flex gap-2 border-t border-slate-800 p-3">
+      <form onSubmit={handleSubmit} className="flex gap-2 border-t border-slate-100 p-3">
         <input
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          placeholder="Ask a question about this process…"
-          className="flex-1 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-600 focus:border-indigo-500 focus:outline-none"
+          placeholder="Ask about a step, or propose a change…"
+          className="flex-1 rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-sm text-slate-700 placeholder:text-slate-400 focus:border-blue-400 focus:outline-none"
           data-testid="chat-input"
         />
         <button
           type="submit"
           disabled={loading}
-          className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-50"
+          className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-500 disabled:opacity-50"
         >
           Send
         </button>

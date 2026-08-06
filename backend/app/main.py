@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import app.config  # noqa: F401  (import first: loads backend/.env into os.environ)
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
