@@ -41,6 +41,7 @@ def init_db() -> None:
         review_session,
         issue,
         validation,
+        agentic_workflow,
     )
 
     Base.metadata.create_all(bind=engine)
@@ -65,7 +66,9 @@ def use_test_db(db_path) -> None:
     engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
     SessionLocal.configure(bind=engine)
 
-    from app.models import document, claim, process_map, change_request, review_session, issue, validation  # noqa: F401
+    from app.models import (  # noqa: F401
+        document, claim, process_map, change_request, review_session, issue, validation, agentic_workflow,
+    )
 
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)

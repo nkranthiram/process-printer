@@ -1,0 +1,378 @@
+{
+  "_comment": "Manually-authored (manual-agent-pass-v1) agentic workflow spec for the AAMI claims-coverage process map, transcribed and elaborated from the debate-vetted worked example in docs/agentic-workflow-design.md §5/§9. Generated against process-map v2. See skills/agentic-workflow-synthesis/SKILL.md.",
+  "process_map_version_label": "v2",
+  "generator_version": "manual-agent-pass-v1",
+  "nodes": [
+    {
+      "id": "SVC-01",
+      "node_kind": "service",
+      "title": "Ingest FNOL, documents & photos",
+      "source_task_title": null,
+      "claim_refs": [],
+      "spec": {
+        "goal": "Produce a normalized intake bundle (claim record + attached files) from the first notice of loss channel.",
+        "trigger": "Policyholder submits a claim via app, phone transcript, or web form.",
+        "inputs": {"schema": "raw FNOL payload: channel, free-text/transcript, attached files (photos, police report if provided)"},
+        "outputs": {"schema": "{claim_id, intake_channel, raw_narrative, attachments[]}"},
+        "decision_logic": "Pass-through / storage operation only. No interpretation.",
+        "grounding": {"applicable": false, "reason": "No claims cited — pure ingestion, no policy interpretation."},
+        "error_handling": "Malformed/unreadable attachment retried 3x, then flagged to claim record as 'attachment_unreadable' (does not block intake).",
+        "sla": "Real-time (synchronous with submission).",
+        "audit": "Full raw payload + attachment hashes logged.",
+        "downstream_edges": ["always -> SVC-02"]
+      }
+    },
+    {
+      "id": "SVC-02",
+      "node_kind": "service",
+      "title": "Extract & normalize facts into a claim packet",
+      "source_task_title": "Capture the claim description",
+      "claim_refs": ["incident_definition"],
+      "spec": {
+        "goal": "Produce a structured claim packet (incident date/time/location, parties, vehicle, described damage) from the raw intake bundle.",
+        "trigger": "SVC-01 completes.",
+        "inputs": {"schema": "{claim_id, raw_narrative, attachments[]}"},
+        "outputs": {"schema": "{claim_id, structured_fields: {incident_date, incident_location, parties[], vehicle_id, described_damage}, incident_narrative}"},
+        "decision_logic": "Deterministic field extraction (structured form fields) + passthrough of the free-text narrative unmodified for downstream agent steps. No coverage interpretation happens here.",
+        "grounding": {"applicable": false, "reason": "Extraction/normalization only — the definition of 'incident' (incident_definition) governs what counts as one incident for BR-01/AG steps downstream, not this node's own logic."},
+        "error_handling": "Required structured field missing -> claim_packet.missing_facts[] populated, still passed downstream (BR-01/GW-01 handles escalation).",
+        "sla": "Real-time.",
+        "audit": "Structured fields + narrative logged verbatim alongside source attachment references.",
+        "downstream_edges": ["always -> BR-00"]
+      }
+    },
+    {
+      "id": "BR-00",
+      "node_kind": "deterministic",
+      "title": "Verify policyholder identity against certificate of insurance",
+      "source_task_title": "Verify policyholder identity against certificate of insurance",
+      "claim_refs": [],
+      "spec": {
+        "goal": "Confirm the identity of the person submitting the claim matches the certificate of insurance on file.",
+        "trigger": "SVC-02 completes.",
+        "inputs": {"schema": "{claimant_supplied_identity, certificate_of_insurance_record}"},
+        "outputs": {"schema": "{identity_match: bool, mismatch_reason: string|null}"},
+        "decision_logic": "Exact/fuzzy-match lookup against the certificate of insurance record (name, policy number, DOB). Boolean outcome, no interpretation.",
+        "grounding": {"applicable": false, "reason": "Operational identity check, not a policy-coverage rule — no PDS clause governs it."},
+        "error_handling": "Lookup service unavailable -> retry 3x with backoff, then route to Data Correction queue (does not silently pass).",
+        "sla": "Real-time.",
+        "audit": "Match result + fields compared logged (not raw PII beyond what's already on the claim record).",
+        "downstream_edges": ["match -> BR-01", "no match -> HUM-01 (identity mismatch)"]
+      }
+    },
+    {
+      "id": "BR-01",
+      "node_kind": "deterministic",
+      "title": "Policy & incident eligibility gate",
+      "source_task_title": "Confirm policy and incident validity",
+      "claim_refs": ["incident_definition"],
+      "spec": {
+        "goal": "Decide whether the claim is eligible to proceed to coverage analysis.",
+        "trigger": "BR-00 returns identity_match=true.",
+        "inputs": {"schema": "{policy_version_id, effective_dates, incident_date, territory, insured_item, endorsement_set, mandatory_fact_presence_flags}"},
+        "outputs": {"schema": "{gate_result: 'pass'|'fail'|'needs_human', reason_codes[], missing_facts[], citation_refs[]}"},
+        "decision_logic": "Hard rules only, no inference: incident date outside policy period -> fail. Required fields absent or source documents conflict -> needs_human. No discretion beyond the coded rule table.",
+        "grounding": {"fabrication_check": "every reason_code maps to a real clause/page from the pinned policy version", "misapplication_check": "not applicable to pure rule evaluation — rules are pre-verified against source at authoring time, not re-verified per claim"},
+        "confidence_escalation_trigger": {"applicable": false, "reason": "deterministic node — no confidence score; needs_human triggers on the enumerated fact-conflict conditions only"},
+        "escalation_target": {"queue": "Data Correction queue", "sla_hours": 24, "actions": ["request_more_info", "manual_override_with_reason"]},
+        "error_handling": "Rule engine failure -> retry, then escalate to Data Correction queue; never defaults to pass.",
+        "sla": "Real-time.",
+        "audit": "Full rule trace (which rule fired, which fields it read) logged per claim.",
+        "downstream_edges": ["pass -> GW-01", "fail -> SVC-03 (deterministic decline)", "needs_human -> HUM-01"]
+      }
+    },
+    {
+      "id": "GW-01",
+      "node_kind": "gateway",
+      "title": "Missing or contradictory mandatory fact?",
+      "source_task_title": "Confirm policy and incident validity",
+      "claim_refs": [],
+      "spec": {
+        "goal": "Route claims with unresolved intake data problems to the Data Correction queue before coverage analysis, so agent steps never run against known-bad data.",
+        "trigger": "BR-01 returns gate_result='needs_human'.",
+        "inputs": {"schema": "{missing_facts[], reason_codes[]}"},
+        "outputs": {"schema": "n/a — routing only"},
+        "decision_logic": "Deterministic routing condition on BR-01's own output field, not a re-evaluation.",
+        "grounding": {"applicable": false, "reason": "pure routing node"},
+        "downstream_edges": ["yes -> HUM-01 (Data Correction queue)", "no -> AG-02A"]
+      }
+    },
+    {
+      "id": "HUM-01",
+      "node_kind": "human",
+      "title": "Data Correction queue / info-request loop",
+      "source_task_title": null,
+      "claim_refs": [],
+      "spec": {
+        "goal": "Resolve a data-quality problem (missing fact, contradictory documents, identity mismatch) that blocks the claim from proceeding — explicitly distinct from a judgment-call escalation.",
+        "trigger": "GW-01 'yes' branch, or BR-00 identity mismatch.",
+        "inputs": {"schema": "{claim_packet, missing_facts[], reason_codes[]}"},
+        "outputs": {"schema": "{resolution: 'facts_supplied'|'claim_withdrawn'|'escalate_to_specialist', updated_fields}"},
+        "decision_logic": "Reviewer requests/enters the missing fact or confirms identity manually; not a coverage judgment call.",
+        "grounding": {"applicable": false, "reason": "data-quality/identity correction, not a policy-coverage interpretation — nothing here is grounded in a PDS clause"},
+        "escalation_target": {"queue": "Data Correction queue", "sla_hours": 24, "distinct_from": "HUM-02 Action Center (judgment calls) — kept as a separate queue/SLA per §10's escalation-queue-ownership pitfall, so a backlog metric on one doesn't mask the other"},
+        "audit": "Reviewer identity, action taken, updated fields all logged.",
+        "downstream_edges": ["facts_supplied -> BR-01 (re-run)", "claim_withdrawn -> SVC-03 (closed, withdrawn)", "escalate_to_specialist -> HUM-02"]
+      }
+    },
+    {
+      "id": "AG-02A",
+      "node_kind": "agent_escalation",
+      "title": "Classify applicable cover",
+      "source_task_title": "Classify which specific cover applies",
+      "claim_refs": ["accidental_damage_cover", "third_party_property_damage", "windscreen_cover"],
+      "spec": {
+        "goal": "Determine which policy cover(s) apply to the described incident, or that none apply.",
+        "trigger": "GW-01 'no' branch.",
+        "inputs": {
+          "schema": "{claim.incident_narrative, claim.structured_fields, policyholder_schedule (which covers held)}",
+          "context_source": "PDS sections defining each cover type only (accidental damage, third party property damage, windscreen/window glass) — not the full PDS"
+        },
+        "outputs": {
+          "schema": {
+            "candidate_covers": [{"cover_type": "string", "confidence": "0.0-1.0", "citations": [{"clause_id": "string", "quote": "string", "page": "int"}]}],
+            "primary_recommendation": "string|null",
+            "multi_cover_conflict": "bool",
+            "no_cover_identified": "bool",
+            "rationale": "string"
+          }
+        },
+        "decision_logic": "May finalize primary_recommendation autonomously only when exactly one cover has high confidence and no competing candidate is within the defined margin. May not invent a cover not present in the policy schedule.",
+        "grounding": {"fabrication_check": "cited clause_id/quote exists verbatim in retrieved cover-definition sections", "misapplication_check": "cited clause actually defines the specific cover_type claimed, restricted to cover-definition clauses only — may not cite an exclusion clause to justify a cover classification"},
+        "confidence_escalation_trigger": {
+          "condition": "confidence below threshold_set_id value, OR top two candidates within margin, OR a candidate's applicability depends on discretionary wording, OR a required fact is missing",
+          "confidence_score_field": "candidate_covers[].confidence",
+          "confidence_method": "self-reported by the model, provisional",
+          "threshold_set_id": "PROVISIONAL-v1-uncalibrated",
+          "calibration_dataset_version": "none yet — not calibrated against labeled historical claims",
+          "calibration_owner": "unassigned — must be named before this node is enabled for auto-processing",
+          "revalidation_trigger": "any model/prompt/retrieval/clause-taxonomy change"
+        },
+        "escalation_target": {"queue": "Cover Classification Review (Action Center)", "sla_hours": 48},
+        "tools": [{"name": "pds_section_retriever", "when": "always, scoped to cover-definition sections"}, {"name": "policyholder_schedule_lookup", "when": "always, to check which covers are held"}],
+        "max_iterations": 1,
+        "guardrails": ["may not cite exclusion/exception clauses", "may not recommend a cover not on the policyholder's schedule"],
+        "error_handling": "Schema-validation failure on output -> retry with correction prompt up to 3x, then escalate to Cover Classification Review — never guesses.",
+        "audit": "Full input narrative, retrieved context, model+prompt version, citation-verification result, and output logged per claim.",
+        "downstream_edges": ["confident & unambiguous -> AG-02B", "otherwise -> HUM-02 (Cover Classification Review)"]
+      }
+    },
+    {
+      "id": "AG-02B",
+      "node_kind": "agent_escalation",
+      "title": "Screen exclusions & exceptions",
+      "source_task_title": "Check general exclusions",
+      "claim_refs": ["driver_impairment", "reckless_driving", "unlicensed_driver", "unregistered_car", "commercial_use", "motorsport_use", "unattended_unlocked_keys_in_car", "outside_australia", "intentional_act", "mechanical_failure", "wrong_fuel", "overloading", "environmental_hazard", "consequential_loss", "tyre_damage", "unsafe_continued_driving"],
+      "spec": {
+        "goal": "Determine whether any exclusion or carve-out defeats the cover(s) AG-02A identified.",
+        "trigger": "AG-02A confident/unambiguous branch.",
+        "inputs": {
+          "schema": "{ag_02a.candidate_covers (both, if ag_02a flagged multi_cover_conflict), claim_packet}",
+          "context_source": "exclusion/exception clauses relevant to the identified cover(s) only"
+        },
+        "outputs": {"schema": "{exclusion_status: 'clean'|'excluded'|'needs_human', exclusion_hits[], exception_flags[], confidence, rationale, citation_refs[]}"},
+        "decision_logic": "Evaluates only exclusions relevant to the already-classified cover(s). May identify a probable exclusion; may not issue a final adverse decision alone.",
+        "grounding": {"fabrication_check": "cited exclusion clause exists verbatim in the retrieved set", "misapplication_check": "cited clause's actual exclusion scope covers the specific fact pattern claimed — restricted to exclusion/exception clauses only, may not cite a cover-definition clause"},
+        "confidence_escalation_trigger": {
+          "condition": "discretionary wording present (e.g. 'reasonable', 'as soon as reasonably possible') OR contradictory evidence OR exclusion outcome differs materially across ambiguous cover candidates from AG-02A OR missing material fact OR low confidence",
+          "threshold_set_id": "PROVISIONAL-v1-uncalibrated",
+          "calibration_dataset_version": "none yet",
+          "calibration_owner": "unassigned",
+          "revalidation_trigger": "any model/prompt/retrieval/clause-taxonomy change"
+        },
+        "escalation_target": {"queue": "Exclusion Judgment queue (Action Center)", "sla_hours": 48},
+        "tools": [{"name": "pds_section_retriever", "when": "always, scoped to exclusion/exception clauses for the classified cover(s)"}],
+        "max_iterations": 1,
+        "guardrails": ["may not cite cover-definition clauses to justify an exclusion", "may not issue a final adverse decision — flags only, GW-02 + HUM-02 own the actual adverse determination"],
+        "error_handling": "Schema-validation failure -> retry x3 then escalate, never guesses.",
+        "audit": "Full input, retrieved context, model+prompt version, citation-verification result logged.",
+        "downstream_edges": ["clean, high confidence -> BR-02", "excluded or needs_human -> GW-02"]
+      }
+    },
+    {
+      "id": "GW-02",
+      "node_kind": "gateway",
+      "title": "Outcome gateway, scoped by cause (coverage stage)",
+      "source_task_title": "Reach the coverage decision",
+      "claim_refs": [],
+      "spec": {
+        "goal": "Route the coverage-stage outcome by CAUSE of adversity — never merge deterministic declines and agent-judgment adverse outcomes into the same branch.",
+        "trigger": "AG-02B 'excluded or needs_human' branch, or BR-01 fail.",
+        "decision_logic": "Deterministic routing rule, per §2's escalation scoping rule: (a) deterministic decline (lapsed/outside period/unpaid premium, from BR-01) -> auto-process -> async sampled QA lane, never a human hop. (b) agent-judgment adverse (AG-02B exclusion applied, discretionary clause, unresolved cover ambiguity, above delegated authority) -> HUM-02. (c) not excluded -> continue to BR-02.",
+        "grounding": {"applicable": false, "reason": "routing on upstream nodes' own typed outputs, not a new interpretation"},
+        "downstream_edges": [
+          "deterministic decline -> SVC-03 (auto-process) -> QA-01 (async sample)",
+          "agent-judgment adverse -> HUM-02",
+          "not excluded -> BR-02"
+        ]
+      }
+    },
+    {
+      "id": "QA-01",
+      "node_kind": "service",
+      "title": "Async sampled QA lane",
+      "source_task_title": null,
+      "claim_refs": [],
+      "spec": {
+        "goal": "Provide governance evidence that the population of auto-processed decisions (approved AND declined) is periodically checked, without sitting synchronously in the customer-facing critical path.",
+        "trigger": "Any auto-process branch (GW-02 or GW-03 'auto-process' edges), on a stratified sample — by risk tier, severity, model/prompt-version drift, or random percentage — run post-hoc against already-closed cases.",
+        "decision_logic": "Sampling policy is configuration, not per-claim judgment. NOT a mandatory gate: throughput of the mainline flow is unaffected.",
+        "grounding": {"applicable": false, "reason": "governance/sampling operation, not a coverage decision — a sampled review may itself re-check an underlying agent node's grounding, but this node's own logic cites nothing"},
+        "escalation_target": {"circuit_breaker": "if sampled error rate on a given node exceeds a configured threshold in a rolling window, that node is automatically forced back into synchronous human review (GW-02/GW-03 routing rules updated) until recalibrated — a dashboard-only report without this trigger is explicitly insufficient per §6"},
+        "audit": "Sampled case, reviewer finding, and (if triggered) circuit-breaker state change all logged.",
+        "downstream_edges": ["finding: no issue -> close", "finding: node error rate over threshold -> trip circuit breaker on that node"]
+      }
+    },
+    {
+      "id": "HUM-02",
+      "node_kind": "human",
+      "title": "Action Center: ambiguity / adverse-judgment review",
+      "source_task_title": "Escalate to manual review",
+      "claim_refs": [],
+      "spec": {
+        "goal": "Resolve genuine ambiguity, contradiction, or discretion the source document leaves open, or approve/override an agent-judgment adverse outcome.",
+        "trigger": "Any agent-derived adverse or above-authority outcome (GW-02 or GW-03 'agent-judgment adverse' edge) — never a pure deterministic decline.",
+        "inputs": {"schema": "{claim_packet, all prior agent outputs with citations, relevant issue-log entry if one exists, highlighted contradictions}"},
+        "outputs": {"schema": "{human_decision: 'approve'|'override'|'request_more_info'|'escalate_to_specialist', override_notes, additional_facts_requested[], final_authority_reason}"},
+        "decision_logic": "Reviewer selects from the enumerated outcome set only — not free text as the sole record.",
+        "escalation_target": {"queue": "Action Center", "process_app": "operational triage dashboard, distinct from a single Action Center task", "sla_hours": 48},
+        "grounding": {"applicable": false, "reason": "human decision, not an automated fabrication/misapplication check — but see citation_confirmation_requirement below, which is this node's equivalent discipline"},
+        "citation_confirmation_requirement": "reviewer must confirm or select the controlling citation(s) before completion — the decision trail stays as auditable as the agent's",
+        "audit": "Reviewer identity, decision, override_notes, and confirmed citations all logged.",
+        "downstream_edges": ["approve -> BR-02 or SVC-03 (depending on which gateway routed here)", "override -> SVC-03 (outcome per override)", "request_more_info -> HUM-01", "escalate_to_specialist -> (out of scope for this workflow — specialist queue)"]
+      }
+    },
+    {
+      "id": "BR-02",
+      "node_kind": "deterministic",
+      "title": "Sub-limits, excess & waiting-period check",
+      "source_task_title": "Check the specific cover's own conditions",
+      "claim_refs": ["excess", "excess_types", "not_at_fault_excess_waiver", "windscreen_cover", "windscreen_chip_repair"],
+      "spec": {
+        "goal": "Calculate the applicable excess (including waiver conditions) and confirm the claim is within any cover-specific sub-limit.",
+        "trigger": "AG-02B 'clean' branch, or HUM-02 'approve' where applicable.",
+        "inputs": {"schema": "{cover_type, claim_facts (at-fault details supplied?, windscreen-only damage?), certificate_of_insurance excess schedule}"},
+        "outputs": {"schema": "{excess_payable: number, excess_waived: bool, sub_limit_applies: bool, sub_limit_amount: number|null, citation_refs[]}"},
+        "decision_logic": "Hard rule table: standard excess waived only if not-at-fault AND at-fault driver name/address AND at-fault vehicle registration all supplied (not_at_fault_excess_waiver) — missing any one of the three means excess is payable. Windscreen-only damage claims are excess-free up to one claim per period (windscreen_cover), and a safely-repairable chip doesn't consume that one claim (windscreen_chip_repair). No discretion.",
+        "grounding": {"fabrication_check": "every rule maps to a real clause", "misapplication_check": "not applicable — pre-verified rule table, same as BR-01"},
+        "confidence_escalation_trigger": {"applicable": false, "reason": "deterministic"},
+        "error_handling": "Rule engine failure -> retry, then route to HUM-02 rather than guessing an excess amount.",
+        "sla": "Real-time.",
+        "audit": "Full rule trace logged.",
+        "downstream_edges": ["always -> AG-03"]
+      }
+    },
+    {
+      "id": "AG-03",
+      "node_kind": "agent_escalation",
+      "title": "Draft settlement recommendation",
+      "source_task_title": "Determine settlement path: repair or total loss",
+      "claim_refs": ["total_loss", "total_loss_deductions", "stolen_car_total_loss_timing", "market_value_definition", "amount_covered_definition", "new_car_after_total_loss", "hire_car_after_theft", "transport_cover"],
+      "spec": {
+        "goal": "Produce a recommended settlement outcome, amount band, and rationale (decide only — see AG-04 for the separate customer-facing draft).",
+        "trigger": "BR-02 completes.",
+        "inputs": {"schema": "{cover_classification, exclusion_analysis, policy_limits, excess_result, valuation_inputs, any human clarifications recorded upstream}"},
+        "outputs": {"schema": "{recommended_outcome, payment_band, open_questions[], confidence, citation_refs[]}"},
+        "decision_logic": "May draft a recommendation within delegated $/risk-tier authority. May not issue a final adverse or above-authority decision without human sign-off. Repair-vs-total-loss determination follows total_loss's uneconomical-or-unsafe-to-repair test and State/Territory write-off criteria; stolen-car timing follows the 14-day rule (stolen_car_total_loss_timing).",
+        "grounding": {"fabrication_check": "cited clause exists verbatim", "misapplication_check": "cited clause supports the specific coverage/payment-rationale statement made — checked on every coverage and payment-rationale statement, not just the headline outcome"},
+        "confidence_escalation_trigger": {
+          "condition": "outcome is adverse or partial-adverse BECAUSE OF agent judgment (not a prior deterministic decline — GW-02/GW-03 already separated that) OR above delegated authority OR low confidence OR unresolved factual conflict OR any clause using discretionary language ('may', 'at its discretion')",
+          "threshold_set_id": "PROVISIONAL-v1-uncalibrated",
+          "calibration_dataset_version": "none yet",
+          "calibration_owner": "unassigned",
+          "revalidation_trigger": "any model/prompt/retrieval/clause-taxonomy change"
+        },
+        "escalation_target": {"queue": "Settlement Approval queue (Action Center)", "sla_hours": 48},
+        "tools": [{"name": "pds_section_retriever", "when": "always, scoped to settlement/valuation/total-loss sections"}, {"name": "market_value_lookup", "when": "when a total-loss valuation is required"}],
+        "max_iterations": 1,
+        "guardrails": ["may not exceed delegated $/risk-tier authority", "may not finalize an adverse outcome unsupervised"],
+        "error_handling": "Schema-validation failure -> retry x3 then escalate.",
+        "audit": "Full input, retrieved context, model+prompt version, citation-verification result logged.",
+        "downstream_edges": ["within authority & clean -> AG-04", "agent-judgment adverse / over-authority -> GW-03"]
+      }
+    },
+    {
+      "id": "AG-04",
+      "node_kind": "agent",
+      "title": "Draft customer-facing explanation",
+      "source_task_title": null,
+      "claim_refs": [],
+      "spec": {
+        "goal": "Produce customer-facing wording explaining the settlement outcome and rationale, in plain language, citing what was covered/excluded and why — deliberately a SEPARATE node from AG-03 (decide/draft split, per §5's explicit callout: a node that both decides and drafts customer wording should always be split).",
+        "trigger": "AG-03 'within authority & clean' branch, or HUM-02 approve on a settlement decision.",
+        "inputs": {"schema": "{ag_03.recommended_outcome, ag_03.rationale, ag_03.citation_refs, customer communication style guide}"},
+        "outputs": {"schema": "{customer_letter_draft, plain_language_summary, citation_refs[]}"},
+        "decision_logic": "Rewords AG-03's already-decided outcome for a customer audience. Does not re-decide the outcome — no new coverage judgment happens in this node.",
+        "grounding": {"fabrication_check": "every clause referenced in the customer letter exists verbatim in AG-03's already-verified citation_refs (no new citations introduced)", "misapplication_check": "wording doesn't overstate/understate what AG-03 actually decided"},
+        "error_handling": "Schema-validation failure -> retry x3 then falls back to a template letter + flags for human wording review (never sends an unvalidated draft).",
+        "sla": "Real-time.",
+        "audit": "Draft + final sent version logged.",
+        "downstream_edges": ["always -> GW-03"]
+      }
+    },
+    {
+      "id": "GW-03",
+      "node_kind": "gateway",
+      "title": "Outcome gateway, scoped by cause (settlement stage)",
+      "source_task_title": "Reach the coverage decision",
+      "claim_refs": [],
+      "spec": {
+        "goal": "Same cause-scoped test as GW-02, applied to the settlement outcome — kept as a structurally separate gateway rather than reusing GW-02, since it evaluates a different upstream node's output.",
+        "trigger": "AG-03 or AG-04 completes.",
+        "decision_logic": "agent-judgment adverse / over-authority (from AG-03) -> HUM-02. clean / within authority -> auto-process -> QA-01.",
+        "grounding": {"applicable": false, "reason": "routing on AG-03's own typed output"},
+        "downstream_edges": ["agent-judgment adverse / over-authority -> HUM-02", "clean -> SVC-03 (auto-process) -> QA-01 (async sample)"]
+      }
+    },
+    {
+      "id": "SVC-03",
+      "node_kind": "service",
+      "title": "Generate outcome letter & write back to claims system",
+      "source_task_title": "Reach the coverage decision",
+      "claim_refs": [],
+      "spec": {
+        "goal": "Persist the final decision to the claims system and dispatch the outcome letter, then close the coverage-determination subprocess.",
+        "trigger": "GW-02 deterministic-decline branch, GW-03 clean branch, or HUM-02 override/approve.",
+        "inputs": {"schema": "{final_decision, customer_letter (from AG-04, if applicable), audit_trail}"},
+        "outputs": {"schema": "{claims_system_write_confirmation, letter_dispatch_confirmation}"},
+        "decision_logic": "Write-back + dispatch only — no interpretation.",
+        "grounding": {"applicable": false, "reason": "pure write-back/dispatch node"},
+        "error_handling": "Write-back failure -> retry with backoff, then alert ops (claim stays open, not silently lost).",
+        "sla": "Real-time.",
+        "audit": "Full write-back payload + dispatch confirmation logged; this is the terminal audit record for the coverage-determination subprocess.",
+        "downstream_edges": ["always -> close (Maestro Case: claim lifecycle continues outside this subprocess)"]
+      }
+    }
+  ],
+  "edges": [
+    {"from": "SVC-01", "to": "SVC-02", "condition_label": null},
+    {"from": "SVC-02", "to": "BR-00", "condition_label": null},
+    {"from": "BR-00", "to": "BR-01", "condition_label": "identity match"},
+    {"from": "BR-00", "to": "HUM-01", "condition_label": "identity mismatch"},
+    {"from": "BR-01", "to": "GW-01", "condition_label": "pass"},
+    {"from": "BR-01", "to": "SVC-03", "condition_label": "fail (deterministic decline)"},
+    {"from": "BR-01", "to": "HUM-01", "condition_label": "needs_human"},
+    {"from": "GW-01", "to": "HUM-01", "condition_label": "missing/contradictory fact"},
+    {"from": "GW-01", "to": "AG-02A", "condition_label": "facts complete"},
+    {"from": "HUM-01", "to": "BR-01", "condition_label": "facts_supplied"},
+    {"from": "HUM-01", "to": "SVC-03", "condition_label": "claim_withdrawn"},
+    {"from": "HUM-01", "to": "HUM-02", "condition_label": "escalate_to_specialist"},
+    {"from": "AG-02A", "to": "AG-02B", "condition_label": "confident & unambiguous"},
+    {"from": "AG-02A", "to": "HUM-02", "condition_label": "low confidence / ambiguous"},
+    {"from": "AG-02B", "to": "BR-02", "condition_label": "clean, high confidence"},
+    {"from": "AG-02B", "to": "GW-02", "condition_label": "excluded or needs_human"},
+    {"from": "GW-02", "to": "SVC-03", "condition_label": "deterministic decline"},
+    {"from": "GW-02", "to": "HUM-02", "condition_label": "agent-judgment adverse"},
+    {"from": "GW-02", "to": "BR-02", "condition_label": "not excluded"},
+    {"from": "SVC-03", "to": "QA-01", "condition_label": "auto-processed (sampled)"},
+    {"from": "HUM-02", "to": "BR-02", "condition_label": "approve"},
+    {"from": "HUM-02", "to": "SVC-03", "condition_label": "override"},
+    {"from": "HUM-02", "to": "HUM-01", "condition_label": "request_more_info"},
+    {"from": "BR-02", "to": "AG-03", "condition_label": null},
+    {"from": "AG-03", "to": "AG-04", "condition_label": "within authority & clean"},
+    {"from": "AG-03", "to": "GW-03", "condition_label": "agent-judgment adverse / over-authority"},
+    {"from": "AG-04", "to": "GW-03", "condition_label": null},
+    {"from": "GW-03", "to": "HUM-02", "condition_label": "agent-judgment adverse / over-authority"},
+    {"from": "GW-03", "to": "SVC-03", "condition_label": "clean"}
+  ]
+}

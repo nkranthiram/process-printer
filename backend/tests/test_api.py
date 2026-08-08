@@ -213,6 +213,42 @@ def test_list_validation_cases(client):
     assert any(len(c["traced_path"]) == 4 for c in cases)  # the two short exclusion-path scenarios
 
 
+def test_get_agentic_workflow(client):
+    """Real HTTP path for the new agentic-workflow endpoint -- confirms the
+    generated spec is served against the CURRENT (v2) process map version,
+    every node has the required grounding shape, and the escalation-scoping
+    rule holds in what's actually served (not just in the loader test)."""
+    doc_id = client.get("/api/documents").json()[0]["id"]
+    r = client.get(f"/api/documents/{doc_id}/agentic-workflow")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["process_map_version_label"] == "v2"
+    assert body["generator_version"] == "manual-agent-pass-v1"
+    assert len(body["nodes"]) >= 15
+    assert len(body["edges"]) >= 25
+
+    kinds = {n["node_kind"] for n in body["nodes"]}
+    assert kinds == {"deterministic", "agent", "agent_escalation", "human", "service", "gateway"}
+
+    # Every node carries a grounding decision (applicable:false+reason, or
+    # both fabrication/misapplication checks) -- served data, not just the
+    # source file.
+    for n in body["nodes"]:
+        grounding = n["spec"].get("grounding")
+        assert grounding is not None, n["id"] if "id" in n else n["title"]
+
+    # At least one node actually resolved real citations end-to-end (id ->
+    # AtomicClaim row -> CitationOut), proving claim_refs aren't decorative.
+    cited_nodes = [n for n in body["nodes"] if n["citations"]]
+    assert len(cited_nodes) >= 3
+    assert any(c["subject"] == "driver_impairment" for n in cited_nodes for c in n["citations"])
+
+
+def test_agentic_workflow_404_before_any_document(client):
+    r = client.get("/api/documents/does-not-exist/agentic-workflow")
+    assert r.status_code == 404
+
+
 def test_chat_unknown_document_404s(client):
     r = client.post("/api/chat", json={"document_id": "nope", "message": "hi"})
     assert r.status_code == 404

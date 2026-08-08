@@ -42,6 +42,9 @@ function mockHappyPath() {
   vi.spyOn(api, 'listChangeRequests').mockResolvedValue(changeRequests)
   vi.spyOn(api, 'listProcessMapVersions').mockResolvedValue(versions)
   vi.spyOn(api, 'listValidationCases').mockResolvedValue(validationCases)
+  // Agentic workflow is an optional, downstream artifact — most test docs
+  // won't have one generated, matching a real 404 from the API.
+  vi.spyOn(api, 'getAgenticWorkflow').mockRejectedValue(new Error('404'))
 }
 
 afterEach(() => {
@@ -92,6 +95,36 @@ describe('App', () => {
     render(<App />)
     await waitFor(() => screen.getByTestId('version-badge'))
     expect(screen.getByTestId('version-badge')).toHaveTextContent('v1')
+  })
+
+  it('switching to the workflow tab shows the agentic workflow when one exists', async () => {
+    mockHappyPath()
+    const workflow: api.AgenticWorkflow = {
+      id: 'wf-1', document_id: 'doc-1', process_map_version_id: 'pm-1',
+      process_map_version_label: 'v1', generator_version: 'manual-agent-pass-v1', status: 'draft',
+      nodes: [
+        { id: 'n1', node_kind: 'deterministic', title: 'Policy eligibility gate', goal: 'Decide eligibility', source_task_title: null, spec: { grounding: { applicable: false, reason: 'n/a' } }, citations: [] },
+      ],
+      edges: [],
+    }
+    vi.spyOn(api, 'getAgenticWorkflow').mockResolvedValue(workflow)
+
+    render(<App />)
+    await waitFor(() => screen.getByTestId('tab-workflow'))
+    fireEvent.click(screen.getByTestId('tab-workflow'))
+
+    await waitFor(() => expect(screen.getByTestId('agentic-workflow-panel')).toBeInTheDocument())
+    expect(screen.getByText('Policy eligibility gate')).toBeInTheDocument()
+  })
+
+  it('workflow tab shows an empty state, not an error, when no workflow has been generated', async () => {
+    mockHappyPath()
+
+    render(<App />)
+    await waitFor(() => screen.getByTestId('tab-workflow'))
+    fireEvent.click(screen.getByTestId('tab-workflow'))
+
+    await waitFor(() => expect(screen.getByText(/no agentic workflow generated yet/i)).toBeInTheDocument())
   })
 
   it('shows an explicit error state if the API call fails, not a blank screen', async () => {

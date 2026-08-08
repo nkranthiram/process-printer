@@ -58,6 +58,36 @@ export interface ProcessMap {
   edges: ProcessEdge[]
 }
 
+export type AgenticNodeKind = 'deterministic' | 'agent' | 'agent_escalation' | 'human' | 'service' | 'gateway'
+
+export interface AgenticWorkflowNode {
+  id: string
+  node_kind: AgenticNodeKind
+  title: string
+  goal: string
+  source_task_title: string | null
+  spec: Record<string, unknown>
+  citations: Citation[]
+}
+
+export interface AgenticWorkflowEdge {
+  id: string
+  from_node_id: string
+  to_node_id: string
+  condition_label: string | null
+}
+
+export interface AgenticWorkflow {
+  id: string
+  document_id: string
+  process_map_version_id: string
+  process_map_version_label: string
+  generator_version: string
+  status: string
+  nodes: AgenticWorkflowNode[]
+  edges: AgenticWorkflowEdge[]
+}
+
 export interface Issue {
   id: string
   issue_type: 'gap' | 'ambiguity' | 'low_confidence_extraction'
@@ -175,6 +205,10 @@ export function listDocuments(): Promise<DocumentSummary[]> {
 
 export function getProcessMap(documentId: string): Promise<ProcessMap> {
   return getJSON(`/api/documents/${documentId}/process-map`)
+}
+
+export function getAgenticWorkflow(documentId: string): Promise<AgenticWorkflow> {
+  return getJSON(`/api/documents/${documentId}/agentic-workflow`)
 }
 
 export function listIssues(documentId: string): Promise<Issue[]> {

@@ -20,6 +20,7 @@ underneath it.
 | Writing the handler/BPA-facing description for a process map task | `task-description-authoring/SKILL.md` |
 | Recording something the document doesn't resolve, without pausing the build | `gap-ambiguity-logging/SKILL.md` |
 | Sanity-checking a process map against a real claim scenario | `scenario-validation/SKILL.md` |
+| Turning an approved process map into a builder-ready agentic workflow spec (deterministic/agent/human/gateway nodes) | `agentic-workflow-synthesis/SKILL.md` |
 
 ## Chain
 
@@ -36,4 +37,8 @@ underneath it.
                                         │
                                         ▼
                              scenario-validation
+                                        │
+                                        ▼  (downstream, optional -- run once the
+                                        │   human-facing map is approved, not before)
+                             agentic-workflow-synthesis
 ```

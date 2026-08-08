@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
+  getAgenticWorkflow,
   getProcessMap,
   listChangeRequests,
   listDocuments,
   listIssues,
   listProcessMapVersions,
   listValidationCases,
+  type AgenticWorkflow,
   type ChangeRequest,
   type DocumentSummary,
   type Issue,
@@ -19,8 +21,9 @@ import IssuesPanel from './components/IssuesPanel'
 import ChangeRequestsPanel from './components/ChangeRequestsPanel'
 import ChatPanel from './components/ChatPanel'
 import ValidationPanel from './components/ValidationPanel'
+import AgenticWorkflowPanel from './components/AgenticWorkflowPanel'
 
-type Tab = 'map' | 'feedback' | 'validation' | 'chat'
+type Tab = 'map' | 'feedback' | 'validation' | 'workflow' | 'chat'
 
 export default function App() {
   const [documents, setDocuments] = useState<DocumentSummary[] | null>(null)
@@ -29,6 +32,7 @@ export default function App() {
   const [changeRequests, setChangeRequests] = useState<ChangeRequest[]>([])
   const [versions, setVersions] = useState<ProcessMapVersionSummary[]>([])
   const [validationCases, setValidationCases] = useState<ValidationCase[]>([])
+  const [agenticWorkflow, setAgenticWorkflow] = useState<AgenticWorkflow | null>(null)
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
   const [tab, setTab] = useState<Tab>('map')
   const [showVersionHistory, setShowVersionHistory] = useState(false)
@@ -62,6 +66,13 @@ export default function App() {
     listValidationCases(documentId)
       .then(setValidationCases)
       .catch((e) => setError(e instanceof Error ? e.message : 'Failed to load validation cases'))
+    // Agentic workflow is a downstream, OPTIONAL artifact (see
+    // skills/agentic-workflow-synthesis/SKILL.md) — a 404 here (none
+    // generated yet) is expected for some documents and must not surface as
+    // a page-level error like the other fetches above.
+    getAgenticWorkflow(documentId)
+      .then(setAgenticWorkflow)
+      .catch(() => setAgenticWorkflow(null))
   }, [documentId])
 
   useEffect(() => {
@@ -166,6 +177,7 @@ export default function App() {
                 ['map', 'Process map'],
                 ['feedback', `Feedback${pendingFeedbackCount > 0 ? ` (${pendingFeedbackCount})` : ''}`],
                 ['validation', `Test scenarios (${validationCases.length})`],
+                ['workflow', 'Agentic workflow'],
                 ['chat', 'Chatbot'],
               ] as [Tab, string][]
             ).map(([key, label]) => (
@@ -211,6 +223,11 @@ export default function App() {
         {tab === 'validation' && (
           <div className="mx-auto w-full max-w-3xl">
             <ValidationPanel cases={validationCases} tasks={processMap.tasks} />
+          </div>
+        )}
+        {tab === 'workflow' && (
+          <div className="mx-auto w-full max-w-3xl">
+            <AgenticWorkflowPanel workflow={agenticWorkflow} />
           </div>
         )}
         {tab === 'chat' && (

@@ -59,6 +59,34 @@ class ProcessMapOut(BaseModel):
     edges: list[EdgeOut]
 
 
+class AgenticWorkflowNodeOut(BaseModel):
+    id: str
+    node_kind: str
+    title: str
+    goal: str
+    source_task_title: str | None
+    spec: dict
+    citations: list[CitationOut]
+
+
+class AgenticWorkflowEdgeOut(BaseModel):
+    id: str
+    from_node_id: str
+    to_node_id: str
+    condition_label: str | None
+
+
+class AgenticWorkflowOut(BaseModel):
+    id: str
+    document_id: str
+    process_map_version_id: str
+    process_map_version_label: str
+    generator_version: str
+    status: str
+    nodes: list[AgenticWorkflowNodeOut]
+    edges: list[AgenticWorkflowEdgeOut]
+
+
 class IssueOut(BaseModel):
     id: str
     issue_type: str

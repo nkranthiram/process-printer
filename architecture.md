@@ -320,3 +320,62 @@ original 5 validation cases — visible, not hidden.
 today after a live approval (see `docs/process-map-snapshots/README.md`) —
 there's no "commit this approved edit to the repo" button yet. Revisit if
 approvals become frequent enough that manual authoring is a bottleneck.
+
+## Decision: agentic workflow synthesis as a separate, downstream, optional artifact
+
+**Problem:** the app's original scope explicitly excluded building the
+coverage-decisioning agent itself — only the human-facing process map. The
+user later asked (via `docs/agentic-workflow-design.md`, a Claude/GPT-debated
+design) for the next step: turning that map into a spec an implementer (e.g.
+a UiPath Maestro builder) can build an actual agentic workflow from.
+
+**Decision:** this is a **new, separate artifact** (`AgenticWorkflowVersion` /
+`Node` / `Edge`), not a mutation of `ProcessTask`/`ProcessEdge`. The human
+process map stays exactly what a BPA reviews and signs off on; the agentic
+workflow is generated *from* an existing process-map version (referenced by
+id + denormalized label) and can be regenerated independently as the map
+changes, without ever touching the map's own tables. This keeps the
+non-negotiable from the original build intact: Process Printer draws the
+process, it doesn't execute it.
+
+**Why more nodes than the source map:** per the design doc's §2 classification
+test (deterministic rule vs. autonomous agent vs. agent+escalation), a single
+human task like "check general exclusions" decomposes into multiple nodes
+once every decision boundary has to be machine-evaluable. The AAMI process
+map's 11 human-facing tasks expand to 16 workflow nodes + 29 edges (service,
+deterministic/DMN, agent, agent+escalation, human, and gateway nodes) — a
+relabeled 1:1 mapping would have been a sign this wasn't done properly, and
+the validator doesn't check for "more nodes than source," but the SKILL.md
+names it as the single most common failure mode to watch for.
+
+**Why the AAMI seed is transcribed from the design doc, not freshly
+LLM-generated:** the design doc's §5/§9 worked example was itself produced
+via a structured Claude/GPT debate specifically about this AAMI case — it's
+a higher-fidelity source for this one document than a fresh, unreviewed LLM
+call would likely produce. The mechanism (`app/pipeline/agentic_workflow.py`)
+is generic — it loads and validates a spec against a fixed schema/rulebook,
+regardless of who or what authored it — so a future document just needs its
+own spec file (hand-authored or LLM-authored) in the same shape.
+
+**Validator enforces the design doc's non-negotiables structurally, not just
+by convention:** the escalation-scoping rule (a "deterministic decline" edge
+may never route to a human node; an "agent-judgment adverse" edge always
+must, directly or via a gateway), the dual grounding requirement (fabrication
++ misapplication checks declared separately, never one combined checkbox),
+mandatory calibration metadata on every `agent_escalation` node's confidence
+trigger (never a bare, unqualified number), and citation integrity
+(`claim_refs` must resolve to real, currently-extracted claim subjects).
+Building the validator *after* authoring the AAMI data file caught 3 real
+gaps in that file on first run (see PROGRESS.md task 35) — proof the checks
+do real work, not decoration.
+
+**What this doesn't do (named, not silently deferred, per the design doc's
+own §11 roadmap and non-goals):** no automated Q1-Q3 classification via LLM
+yet (today's generator is a validated loader, not a live judgment call); no
+confidence threshold calibration (every threshold ships tagged
+`PROVISIONAL-v1-uncalibrated` with an unassigned `calibration_owner` —
+explicitly not a delivered value per the design doc's §8); no QA-lane circuit
+breaker implementation (spec'd as a node, not built as running
+infrastructure); no actual UiPath Maestro export/build — this produces the
+spec a Maestro builder needs, not a Maestro process itself, exactly as the
+design doc states its own scope.

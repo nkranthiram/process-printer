@@ -19,6 +19,7 @@ from app.pipeline.synthesis import load_process_map, validate_process_map
 from app.pipeline.issues import load_manual_issues, validate_issues
 from app.pipeline.validation import load_manual_validation_cases, validate_traced_paths
 from app.pipeline.change_log import apply_change_log
+from app.pipeline.agentic_workflow import load_manual_seed as load_agentic_workflow_seed, persist_agentic_workflow
 
 AAMI_PDF = Path(__file__).parent.parent.parent.parent / "docs" / "aami-comprehensive-car-insurance-pds.pdf"
 
@@ -165,7 +166,15 @@ def seed_aami(db=None) -> str:
         # (not row ids) are the reference key, and docs/process-map-snapshots/
         # for how a live review session gets turned into a committed entry.
         db.flush()
-        apply_change_log(db, doc.id, pm)
+        current_pm = apply_change_log(db, doc.id, pm)
+
+        # --- agentic workflow spec (downstream, optional artifact -- see
+        # skills/agentic-workflow-synthesis/SKILL.md) generated against the
+        # CURRENT (post-replay) process map version, not v1, so its
+        # source_task_title references match the map a BPA actually approved. ---
+        db.flush()
+        agentic_draft = load_agentic_workflow_seed()
+        persist_agentic_workflow(db, doc.id, current_pm, agentic_draft, claim_id_by_subject)
 
         doc.status = "ready"
         db.commit()

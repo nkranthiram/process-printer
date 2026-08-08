@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.chat import handle_message
 from app.database import get_db
 from app.models.claim import AtomicClaim
+from app.models.agentic_workflow import AgenticWorkflowEdge, AgenticWorkflowNode, AgenticWorkflowVersion
 from app.models.change_request import ChangeRequest
 from app.models.document import DocumentVersion
 from app.models.issue import Issue
@@ -18,6 +19,9 @@ from app.models.validation import ValidationCase
 from app.pipeline.review_session import consolidate_transcript, get_or_create_open_session
 from app.pipeline.versioning import ChangeApplyError, ChangeSetItemInput, apply_change, apply_change_set
 from app.schemas import (
+    AgenticWorkflowEdgeOut,
+    AgenticWorkflowNodeOut,
+    AgenticWorkflowOut,
     ChangeRequestDecisionIn,
     ChangeRequestOut,
     ChatRequest,
@@ -94,6 +98,49 @@ def get_process_map(document_id: str, db: Session = Depends(get_db)):
     return ProcessMapOut(
         id=pm.id, document_id=pm.document_id, version_label=pm.version_label,
         status=pm.status, tasks=task_outs, edges=edge_outs,
+    )
+
+
+@router.get("/documents/{document_id}/agentic-workflow", response_model=AgenticWorkflowOut)
+def get_agentic_workflow(document_id: str, db: Session = Depends(get_db)):
+    """Returns the agentic workflow spec generated from the CURRENT process
+    map version (see skills/agentic-workflow-synthesis/SKILL.md). 404 if none
+    has been generated yet for this document -- this is a downstream, optional
+    artifact, not guaranteed to exist just because a process map does."""
+    workflow = (
+        db.query(AgenticWorkflowVersion)
+        .filter_by(document_id=document_id)
+        .order_by(AgenticWorkflowVersion.created_at.desc())
+        .first()
+    )
+    if workflow is None:
+        raise HTTPException(404, f"No agentic workflow generated yet for document {document_id}")
+
+    claims_by_id = {c.id: c for c in db.query(AtomicClaim).filter_by(document_id=document_id).all()}
+
+    nodes = db.query(AgenticWorkflowNode).filter_by(workflow_id=workflow.id).all()
+    node_outs = []
+    for n in nodes:
+        claim_ids = json.loads(n.claim_refs or "[]")
+        citations = [_citation_from_claim(claims_by_id[cid]) for cid in claim_ids if cid in claims_by_id]
+        node_outs.append(AgenticWorkflowNodeOut(
+            id=n.id, node_kind=n.node_kind, title=n.title, goal=n.goal,
+            source_task_title=n.source_task_title, spec=json.loads(n.spec_json), citations=citations,
+        ))
+
+    edges = db.query(AgenticWorkflowEdge).filter_by(workflow_id=workflow.id).all()
+    edge_outs = [
+        AgenticWorkflowEdgeOut(id=e.id, from_node_id=e.from_node_id, to_node_id=e.to_node_id,
+                                condition_label=e.condition_label)
+        for e in edges
+    ]
+
+    return AgenticWorkflowOut(
+        id=workflow.id, document_id=workflow.document_id,
+        process_map_version_id=workflow.process_map_version_id,
+        process_map_version_label=workflow.process_map_version_label,
+        generator_version=workflow.generator_version, status=workflow.status,
+        nodes=node_outs, edges=edge_outs,
     )
 
 
