@@ -18,6 +18,7 @@ from app.pipeline.extraction import load_manual_seed, verify_citations
 from app.pipeline.synthesis import load_process_map, validate_process_map
 from app.pipeline.issues import load_manual_issues, validate_issues
 from app.pipeline.validation import load_manual_validation_cases, validate_traced_paths
+from app.pipeline.change_log import apply_change_log
 
 AAMI_PDF = Path(__file__).parent.parent.parent.parent / "docs" / "aami-comprehensive-car-insurance-pds.pdf"
 
@@ -156,6 +157,15 @@ def seed_aami(db=None) -> str:
                 result=c.result,
                 notes=c.notes,
             ))
+
+        # --- replay the committed change log (backend/data/change_log/) ---
+        # This is what makes approved BPA edits (v2, v3, ...) reproducible from
+        # a clean clone/DB instead of only existing in someone's local, git-
+        # ignored SQLite file. See app/pipeline/change_log.py for why titles
+        # (not row ids) are the reference key, and docs/process-map-snapshots/
+        # for how a live review session gets turned into a committed entry.
+        db.flush()
+        apply_change_log(db, doc.id, pm)
 
         doc.status = "ready"
         db.commit()

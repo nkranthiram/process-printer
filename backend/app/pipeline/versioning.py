@@ -27,6 +27,7 @@ from dataclasses import dataclass
 from sqlalchemy.orm import Session
 
 from app.models.process_map import ProcessEdge, ProcessMapVersion, ProcessTask
+from app.models.validation import ValidationCase
 from app.pipeline.synthesis import (
     EdgeDraft,
     ProcessMapDraft,
@@ -218,6 +219,35 @@ def _persist_new_version(db: Session, document_id: str, base_version: ProcessMap
             from_task_id=id_map[e.from_id], to_task_id=id_map[e.to_id],
             condition_label=e.label or None,
         ))
+
+    # Carry forward scenario validation cases whose traced path is still fully
+    # intact in the new structure (every task on the path survived, remapped
+    # via id_map). A case whose path walked through a task this edit removed
+    # is no longer a valid trace of anything -- silently carrying it forward
+    # with the same pass/fail verdict would misrepresent a scenario that was
+    # never actually re-traced, so it's dropped instead and named in the
+    # returned summary (see apply_change/apply_change_set callers) rather than
+    # left for a human to discover missing later. Re-tracing broken scenarios
+    # against the new map is manual, per scenario-validation/SKILL.md -- this
+    # only carries forward what's still provably true.
+    prior_cases = db.query(ValidationCase).filter_by(process_map_id=base_version.id).all()
+    dropped_case_names: list[str] = []
+    for case in prior_cases:
+        old_path = json.loads(case.traced_path)
+        if all(tid in id_map for tid in old_path):
+            db.add(ValidationCase(
+                process_map_id=new_version.id,
+                scenario_name=case.scenario_name,
+                claim_description=case.claim_description,
+                expected_outcome=case.expected_outcome,
+                traced_path=json.dumps([id_map[tid] for tid in old_path]),
+                actual_outcome=case.actual_outcome,
+                result=case.result,
+                notes=case.notes,
+            ))
+        else:
+            dropped_case_names.append(case.scenario_name)
+    new_version._dropped_validation_case_names = dropped_case_names  # not persisted; read by callers for the summary
     return new_version
 
 
@@ -228,6 +258,10 @@ def apply_change(db: Session, document_id: str, base_version: ProcessMapVersion,
     draft = _draft_from_version(db, base_version)
     summary = _apply_single_change(draft, change_type, payload)
     new_version = _persist_new_version(db, document_id, base_version, draft, summary, changed_by)
+    dropped = getattr(new_version, "_dropped_validation_case_names", [])
+    if dropped:
+        summary += f" (dropped {len(dropped)} validation case(s) whose traced path no longer exists: {', '.join(dropped)})"
+        new_version.change_summary = summary
     return AppliedChange(new_version=new_version, change_summary=summary)
 
 
@@ -263,4 +297,8 @@ def apply_change_set(db: Session, document_id: str, base_version: ProcessMapVers
 
     combined_summary = "; ".join(summaries)
     new_version = _persist_new_version(db, document_id, base_version, draft, combined_summary, changed_by)
+    dropped = getattr(new_version, "_dropped_validation_case_names", [])
+    if dropped:
+        combined_summary += f" (dropped {len(dropped)} validation case(s) whose traced path no longer exists: {', '.join(dropped)})"
+        new_version.change_summary = combined_summary
     return AppliedChangeSet(new_version=new_version, change_summaries=summaries)

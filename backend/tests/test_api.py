@@ -199,11 +199,16 @@ def test_chat_with_no_matching_content_says_so_honestly(client):
 
 
 def test_list_validation_cases(client):
+    """Returns validation cases for the CURRENT (latest) process map version.
+    Seeding now produces v1 -> v2 (the committed change-log replay, see
+    app/pipeline/change_log.py), and v2 removed a task 2 of the original 5
+    scenarios traced through -- those 2 are correctly not carried forward
+    (see versioning.py), leaving 3 for the current version."""
     doc_id = client.get("/api/documents").json()[0]["id"]
     r = client.get(f"/api/documents/{doc_id}/validation-cases")
     assert r.status_code == 200
     cases = r.json()
-    assert len(cases) == 5
+    assert len(cases) == 3
     assert all(c["result"] == "pass" for c in cases)
     assert any(len(c["traced_path"]) == 4 for c in cases)  # the two short exclusion-path scenarios
 

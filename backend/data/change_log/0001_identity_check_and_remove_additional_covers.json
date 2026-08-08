@@ -1,0 +1,21 @@
+{
+  "_comment": "Committed record of the real BPA review session approved live on 2026-08-06 (source_review_session_id a863a753-b131-48f1-bfcf-3f831dd2378c... see docs/process-map-snapshots/README.md). Replayed by app/pipeline/change_log.py on every seed so v2 is reproducible from a clean clone, not just present in a local .db file.",
+  "changed_by": "bpa via review session",
+  "items": [
+    {
+      "change_type": "remove_task",
+      "payload": { "task_title": "Check additional and optional covers" },
+      "rationale": "Additional and optional covers now handled in separate process"
+    },
+    {
+      "change_type": "add_task",
+      "payload": {
+        "after_task_title": "Capture the claim description",
+        "node_type": "classification",
+        "title": "Verify policyholder identity against certificate of insurance",
+        "description": "Confirm the identity of the policyholder matches the certificate of insurance before proceeding with claim validation"
+      },
+      "rationale": "New identity verification step requested after claim capture"
+    }
+  ]
+}

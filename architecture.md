@@ -276,3 +276,47 @@ natural next step.
 - The old per-message `ChangeRequest` path and the new session-based
   `ReviewSession` path aren't deduplicated against each other if a BPA
   triggers both for overlapping feedback in one conversation
+
+## Decision: committed change-log replay for durable versioning (not just a durable mechanism)
+
+**Problem found:** versioning (`ProcessMapVersion`, `apply_change`/
+`apply_change_set`) was fully built and tested, but `*.db` is (correctly)
+gitignored — so the actual **data** produced by an approved BPA edit (v2, v3,
+...) only ever existed in whichever machine's local SQLite file it was
+approved on. A fresh clone reseeded straight back to v1, silently losing
+every approved edit. This was a real gap between "versioning is built" and
+"the process map is actually saved to the repo," caught by directly
+inspecting the local DB rather than assuming the mechanism implied the data
+was safe.
+
+**Decision:** commit the *edits themselves*, not a database file. New
+`backend/data/change_log/*.json`, one file per approved change set, applied
+in filename order by `app/pipeline/change_log.py` — through the exact same
+`apply_change_set()` engine the live "Review & Apply Changes" flow uses, so
+replay and a live approval are semantically identical (same atomicity, same
+DAG validation, same one-version-per-approved-set rule).
+
+**Why title references, not database ids:** `ProcessTask`/`ProcessEdge` row
+ids are regenerated on every fresh seed (`_persist_new_version`'s `id_map`),
+so a change-log entry can't commit `task_id: "<uuid>"` and expect it to
+resolve later. Entries instead reference tasks by `task_title` /
+`after_task_title` (the same string a BPA sees in the UI), and
+`change_log.py` resolves title -> current-run id immediately before applying,
+refreshing that index after each entry so a later entry can reference a task
+an earlier entry just added.
+
+**A real gap this surfaced, fixed alongside it:** `ValidationCase`s were
+never carried forward across a version at all — even the original live-built
+v2 (task 30-33) silently had zero scenario coverage. Fixed in
+`versioning.py`'s `_persist_new_version`: a case carries forward only if
+every task on its traced path still exists post-edit (remapped via the same
+`id_map`); otherwise it's dropped and named in the new version's
+`change_summary`, rather than silently vanishing or being carried forward
+with a stale, unverified pass/fail verdict. Concretely: removing "Check
+additional and optional covers" correctly drops 2 of the AAMI build's
+original 5 validation cases — visible, not hidden.
+
+**What this doesn't solve:** the change-log file has to be hand-authored
+today after a live approval (see `docs/process-map-snapshots/README.md`) —
+there's no "commit this approved edit to the repo" button yet. Revisit if
+approvals become frequent enough that manual authoring is a bottleneck.
