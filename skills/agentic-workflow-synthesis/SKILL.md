@@ -174,5 +174,5 @@ generated from. See `app/pipeline/agentic_workflow.py` for the validator
 citation resolves to a real claim in the source document's own extraction —
 not a fixed domain vocabulary) and `data/aami_agentic_workflow.json` for one
 worked example (an insurance PDS, transcribed from the debate-vetted design
-in `docs/agentic-workflow-design.md` §5/§9) — a reference instance of the
+in `docs/agentic-workflow-design.md` §9) — a reference instance of the
 method, not a template to copy onto a different document's process map.
