@@ -225,11 +225,7 @@ export default function App() {
             <ValidationPanel cases={validationCases} tasks={processMap.tasks} />
           </div>
         )}
-        {tab === 'workflow' && (
-          <div className="mx-auto w-full max-w-3xl">
-            <AgenticWorkflowPanel workflow={agenticWorkflow} />
-          </div>
-        )}
+        {tab === 'workflow' && <AgenticWorkflowPanel workflow={agenticWorkflow} />}
         {tab === 'chat' && (
           <div className="mx-auto w-full max-w-2xl">
             <ChatPanel documentId={documentId!} onChangesApplied={refetchAll} />

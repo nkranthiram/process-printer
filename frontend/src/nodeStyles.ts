@@ -1,4 +1,4 @@
-import type { NodeType } from './api'
+import type { AgenticNodeKind, NodeType } from './api'
 
 export const NODE_TYPE_LABEL: Record<NodeType, string> = {
   input_required: 'Input',
@@ -23,6 +23,29 @@ export const NODE_TYPE_STYLE: Record<NodeType, { accent: string; bg: string; bor
   classification: { accent: 'text-indigo-700', bg: 'bg-indigo-50', border: 'border-indigo-200', dot: 'bg-indigo-500' },
   human_review: { accent: 'text-orange-700', bg: 'bg-orange-50', border: 'border-orange-200', dot: 'bg-orange-500' },
   decision: { accent: 'text-emerald-700', bg: 'bg-emerald-50', border: 'border-emerald-200', dot: 'bg-emerald-500' },
+}
+
+// Agentic workflow node kinds, per skills/agentic-workflow-synthesis/SKILL.md's
+// Q1-Q3 classification test. Deliberately a DIFFERENT palette from
+// NODE_TYPE_STYLE above (process-map node types) even where colors are
+// reused, so the two graphs never look like the same taxonomy at a glance —
+// they're related but distinct artifacts (see AgenticWorkflowPanel.tsx).
+export const AGENTIC_NODE_LABEL: Record<AgenticNodeKind, string> = {
+  deterministic: 'Rule (deterministic)',
+  agent: 'Agent',
+  agent_escalation: 'Agent + escalation',
+  human: 'Human',
+  service: 'Service',
+  gateway: 'Gateway',
+}
+
+export const AGENTIC_NODE_STYLE: Record<AgenticNodeKind, { accent: string; bg: string; border: string; dot: string }> = {
+  deterministic: { accent: 'text-sky-700', bg: 'bg-sky-50', border: 'border-sky-200', dot: 'bg-sky-500' },
+  agent: { accent: 'text-violet-700', bg: 'bg-violet-50', border: 'border-violet-200', dot: 'bg-violet-500' },
+  agent_escalation: { accent: 'text-amber-700', bg: 'bg-amber-50', border: 'border-amber-200', dot: 'bg-amber-500' },
+  human: { accent: 'text-rose-700', bg: 'bg-rose-50', border: 'border-rose-200', dot: 'bg-rose-500' },
+  service: { accent: 'text-slate-600', bg: 'bg-slate-100', border: 'border-slate-300', dot: 'bg-slate-400' },
+  gateway: { accent: 'text-emerald-700', bg: 'bg-emerald-50', border: 'border-emerald-200', dot: 'bg-emerald-500' },
 }
 
 export const ISSUE_TYPE_LABEL: Record<string, string> = {

@@ -23,7 +23,7 @@ const workflow: AgenticWorkflow = {
       source_task_title: null, spec: { grounding: { applicable: false, reason: 'routing only' } }, citations: [],
     },
   ],
-  edges: [{ id: 'e1', from_node_id: 'n1', to_node_id: 'n2', condition_label: 'confident' }],
+  edges: [{ id: 'e1', from_node_id: 'n1', to_node_id: 'n2', condition_label: 'agent-judgment adverse' }],
 }
 
 describe('AgenticWorkflowPanel', () => {
@@ -32,32 +32,45 @@ describe('AgenticWorkflowPanel', () => {
     expect(screen.getByText(/no agentic workflow generated yet/i)).toBeInTheDocument()
   })
 
-  it('renders each node with its kind badge and goal', () => {
+  it('renders the graph with each node, and selects the first node by default', () => {
     render(<AgenticWorkflowPanel workflow={workflow} />)
-    expect(screen.getByText('Classify applicable cover')).toBeInTheDocument()
-    expect(screen.getByText('Determine which cover applies')).toBeInTheDocument()
-    expect(screen.getByText('Outcome gateway')).toBeInTheDocument()
-    expect(screen.getByText(/from: Classify which specific cover applies/)).toBeInTheDocument()
+    expect(screen.getByTestId('agentic-workflow-canvas')).toBeInTheDocument()
+    expect(screen.getByTestId('agentic-graph-node-n1')).toBeInTheDocument()
+    expect(screen.getByTestId('agentic-graph-node-n2')).toBeInTheDocument()
+    // First node is auto-selected -> its detail should show in the side panel.
+    expect(screen.getByTestId('agentic-node-detail-panel')).toBeInTheDocument()
+    expect(screen.getAllByText('Classify applicable cover').length).toBeGreaterThan(0)
   })
 
-  it('shows the uncalibrated confidence threshold + owner for an agent_escalation node', () => {
+  it('shows the kind summary counts in the header', () => {
+    render(<AgenticWorkflowPanel workflow={workflow} />)
+    expect(screen.getByText(/1 Agent \+ escalation/)).toBeInTheDocument()
+    expect(screen.getByText(/1 Gateway/)).toBeInTheDocument()
+  })
+
+  it('switches the detail panel when a different node is clicked', () => {
+    render(<AgenticWorkflowPanel workflow={workflow} />)
+    fireEvent.click(screen.getByTestId('agentic-graph-node-n2'))
+    // Detail panel now shows node 2's goal, not node 1's.
+    expect(screen.getByText('Route by cause')).toBeInTheDocument()
+  })
+
+  it('shows the uncalibrated confidence threshold + owner for the selected agent_escalation node', () => {
     render(<AgenticWorkflowPanel workflow={workflow} />)
     expect(screen.getByText(/PROVISIONAL-v1-uncalibrated/)).toBeInTheDocument()
     expect(screen.getByText(/unassigned/)).toBeInTheDocument()
   })
 
-  it('shows cited claim subjects', () => {
+  it('shows cited claim subjects for the selected node', () => {
     render(<AgenticWorkflowPanel workflow={workflow} />)
-    expect(screen.getByText(/accidental_damage_cover/)).toBeInTheDocument()
+    expect(screen.getByText(/accidental_damage_cover/i)).toBeInTheDocument()
   })
 
-  it('expands the full spec JSON on "View spec" click', () => {
+  it('expands the raw spec JSON on click', () => {
     render(<AgenticWorkflowPanel workflow={workflow} />)
-    expect(screen.queryAllByTestId('agentic-node-spec')).toHaveLength(0)
-
-    fireEvent.click(screen.getAllByText('View spec')[0])
-
-    expect(screen.getAllByTestId('agentic-node-spec')).toHaveLength(1)
+    expect(screen.queryByTestId('agentic-node-raw-spec')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByText('View raw spec JSON'))
+    expect(screen.getByTestId('agentic-node-raw-spec')).toBeInTheDocument()
     expect(screen.getByText(/fabrication_check/)).toBeInTheDocument()
   })
 })

@@ -13,4 +13,4 @@ report as it's produced.**
 
 | Date | Document | Process map version | Workflow version | Verdict | Report |
 |---|---|---|---|---|---|
-| _(none yet)_ | | | | | |
+| 2026-08-12 | AAMI Comprehensive Car Insurance | v2 | manual-agent-pass-v1 | **misaligned** — 2 coverage gaps, 2 citation-scope violations, 2/3 scenario mismatches, all traced to 2 root causes | `aami-comprehensive-car-insurance__pm-v2__wf-manual-agent-pass-v1__2026-08-12.md` |

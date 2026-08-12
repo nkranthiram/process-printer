@@ -114,7 +114,8 @@ describe('App', () => {
     fireEvent.click(screen.getByTestId('tab-workflow'))
 
     await waitFor(() => expect(screen.getByTestId('agentic-workflow-panel')).toBeInTheDocument())
-    expect(screen.getByText('Policy eligibility gate')).toBeInTheDocument()
+    // Appears twice: once in the graph node card, once in the auto-selected detail panel.
+    expect(screen.getAllByText('Policy eligibility gate').length).toBeGreaterThan(0)
   })
 
   it('workflow tab shows an empty state, not an error, when no workflow has been generated', async () => {
