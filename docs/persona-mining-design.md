@@ -10,6 +10,19 @@ were resolved are called out explicitly below, not smoothed over — where a
 design choice was contested, this document says so and states the resolved
 rule.
 
+**Two data-volume regimes, one pipeline**: §1–§4 describe the design assuming
+a corpus large enough (thousands of historical claims) for statistical
+clustering and train/holdout validation to actually work. **§5 is a second,
+equally load-bearing section** — a **low-volume mode** for corpora of a
+couple of hundred claims, where clustering and distributional-fidelity
+validation stop being meaningful and a different, LLM+SME-led discovery and
+validation mechanism takes over instead. Same ontology, same schema, same
+non-negotiables in both — only the discovery and validation *mechanism*
+changes, selected per actor role based on how much data actually supports
+that role, not chosen once for the whole corpus. Read §1–§4 first regardless
+of which regime applies to your corpus; §5 is stated as a delta against them,
+not a standalone replacement.
+
 ---
 
 ## 1. Why this exists
@@ -548,6 +561,279 @@ else exists in the target codebase, not sharing pipeline stages with it.
     shouldn't pass (red-before-green, not just a green run on real data).
 12. Run against the real historical claims corpus, review output, iterate.
 
+If the corpus is a couple of hundred claims rather than thousands, step 0
+(before any of the above) is a per-role data-volume assessment — see §5,
+which changes steps 5, 6, and 10 above and adds one new step (a role-level
+viability gate before clustering is even attempted).
+
+---
+
+## 5. Low-volume mode: a couple of hundred claims, not thousands
+
+Everything in §1–§4 assumes a corpus large enough for statistical clustering
+(HDBSCAN) and train/holdout distributional-fidelity validation to actually
+work — realistically, thousands of claims, translating to hundreds of
+actor-instances per role after splitting by role. **At a couple of hundred
+claims total, most roles won't have that.** A role might end up with only
+20–40 actor-instances once the corpus is split by role — nowhere near enough
+for density-based clustering to find real structure, and nowhere near enough
+to estimate a joint distribution over the combinatorial hard-cohort cells
+(vulnerable × structurally-hard × low-literacy × proxy-communication) that
+§2.7's validation gate depends on.
+
+This section is a **delta against §2 and §2.7**, not a separate design.
+Everything else in this document — the granularity *principle* (§2.1's
+non-negotiable — no fixed headcount, no pre-decided taxonomy), the role/
+state/persona/relationship ontology (§2.2, §2.3, §2.5), the extraction
+pipeline's early stages (§2.4 stages 1–4), the output schema shape (§2.6),
+and every non-negotiable (provenance, counterexamples, no fabricated
+behavior) — **applies unchanged, with zero flex.** Only the discovery
+mechanism (replacing HDBSCAN clustering) and the validation mechanism
+(replacing the PSI/KL train/holdout gate) change. Building this as a
+genuinely separate "quick and dirty" tool instead of a mode switch inside
+the same pipeline was explicitly considered and rejected in the debate — the
+real risk isn't code duplication, it's a "prototype" quietly dropping
+provenance or counterexample discipline because it feels like a throwaway
+script rather than the same system.
+
+### 5.1 Why volume breaks the big-N mechanism specifically (not the whole approach)
+
+Two independent failure modes, not one:
+
+- **HDBSCAN needs density contrast to distinguish "cluster" from "noise."**
+  At 20–40 points in a multi-dimensional behavioural feature space (roughly
+  6–10 dimensions: documentation promptness, channel entropy, escalation
+  propensity, trust signals, literacy register, responsiveness volatility),
+  there usually isn't enough data to estimate local density reliably. The
+  result is either one giant blob or every point calling itself its own
+  cluster — both are artifacts of the algorithm colliding with too little
+  data, not a discovery about the actors.
+- **The train/holdout distributional-fidelity check (§2.7) needs enough
+  data to populate a joint distribution over combinatorial cells.** No
+  statistical test — however "gentle" or small-sample-friendly — rescues an
+  empty cell. Substituting a lower-power test and calling it "validation" is
+  worse than admitting there isn't a statistical substitute, because it
+  produces false confidence with a statistical veneer instead of an honest
+  gap.
+
+A third, more subtle failure mode surfaced during the debate and is worth
+stating explicitly, because it's the reason this section doesn't simply
+swap in a "gentler" clustering algorithm: **distance itself degrades at this
+N.** Hierarchical clustering (agglomerative, no density estimation required)
+was the first candidate replacement considered — the reasoning being that
+pairwise distance is still well-defined at N=20, so a dendrogram should be a
+safe fallback. But a dendrogram *always* gets produced, and it looks
+computed, auditable, objective — at N=20–40 in a 6–10 dimension space,
+pairwise distances stop being meaningfully different from each other
+(distance concentration), and whatever dendrogram falls out is highly
+sensitive to linkage-method and feature-scaling choices that were never
+validated at this N the way the big-N design validates its clustering
+choices via bootstrap stability across thousands of points. **A dendrogram
+at this scale carries false authority — the same failure mode correctly
+ruled out for HDBSCAN, just wearing a different algorithm's clothes.**
+
+### 5.2 Discovery: LLM+SME synthesis, primary; clustering demoted to a falsification check
+
+The resolved mechanism, in order:
+
+1. **Build an evidence pack per actor-instance** (reusing the exact
+   actor-episode summaries already produced by §2.4 stage 4 — this
+   machinery doesn't change, doesn't care about corpus size, and is "if
+   anything more comfortable at small N, not less"): episode summary,
+   exemplar quotes, extracted feature vector, and — critically — near-miss
+   instances that could plausibly belong to the same story but don't quite.
+2. **Optionally run agglomerative hierarchical clustering on the feature
+   vectors as a candidate-surfacing aid** — not a decision engine, not an
+   arbiter of cluster count or cut point. Its only job here is to help
+   organize evidence packs into plausible groupings for a human to look at
+   faster; it never gets to unilaterally decide how many personas exist or
+   where the boundary between two of them falls.
+3. **An LLM proposes candidate archetype descriptions** from each
+   evidence-pack grouping, in behavioural language (a name, a Grounding/
+   Behavioural/Context/Frame draft) — explicitly a **draft**, not an
+   admitted persona.
+4. **An SME reviews and decides the actual cut**: merge, split, rename, or
+   reject each candidate, reading the real episode summaries and exemplar
+   quotes behind it — not a distance number. At this N, an SME's read of
+   actual case narratives, with contrastive near-misses in view, is doing a
+   more truthful version of the job a distance metric was trying to
+   approximate, without pretending precision it doesn't have. Because the
+   evidence set is small enough at this volume, the SME can and should
+   personally read every source claim behind every persona before signing
+   off — a genuine feature of small N, not a burden.
+5. **Before any candidate freezes — even as `provisional` — run a
+   falsification/veto check against the feature vectors**: do the proposed
+   member instances actually separate from their logged near-miss
+   counterexamples on **the specific dimensions the SME cited** as the
+   distinguishing story? If they don't separate on any cited dimension,
+   that's a hard veto on freezing the candidate as stated — or, at minimum,
+   it forces the SME's distinction to be justified on grounds the feature
+   vector doesn't capture, and that justification gets logged rather than
+   silently accepted. This is where clustering earns a real, load-bearing
+   role in low-volume mode without being asked to do the one job (deciding
+   cluster count/boundaries from 20–40 points) it structurally can't do
+   reliably at this N. It also operationalizes the anti-narrative-fallacy
+   guard this mode needs: LLMs are specifically good at making two similar
+   things *sound* meaningfully different when asked to, and an ungated
+   LLM+SME-only process has no check against that beyond human vigilance.
+
+Stated as one line: **computed distance is load-bearing for candidate
+surfacing and as a falsification check on the *stated* distinction; SME
+reading of actual case narratives is load-bearing for the discovery and the
+final admission decision.** Neither side is optional.
+
+### 5.3 Validation: no statistical substitute — a different, honestly-weaker check
+
+**Drop PSI/KL entirely for low-volume roles — don't substitute a
+lower-power test and call it equivalent.** Replace §2.7's train/holdout gate
+with:
+
+- **Leave-one-claim-family-out stability review**, not leave-one-*instance*-
+  out. This distinction matters and isn't cosmetic: the big-N design's own
+  holdout is stratified by claim family specifically to prevent correlated
+  claims (the same policyholder, the same incident type, the same
+  catastrophe event) from leaking signal across the split. Dropping to
+  instance-level leave-one-out at small N silently loses that discipline —
+  a persona "supported" by 10 instances that are really 10 interactions
+  with 2 actual people isn't well-supported at all. This is a check, not a
+  numeric gate with a pass/fail threshold — does the candidate's story
+  survive when any one *family's* instances are removed from consideration?
+- **`supporting_claim_families` as a required, machine-checkable schema
+  field, distinct from `evidence_claim_ids`.** The real overfitting
+  currency at this volume is independent claim-family count, not raw
+  instance count — instance count is gameable by repeat actors, near-
+  duplicate claims from one surge event, or a single case handler's
+  idiosyncratic pattern. A minimum threshold (set by whoever owns risk/SME
+  sign-off for the actual programme, not invented here) should be checkable
+  directly against this field, not inferred from a reviewer's mental note.
+- **Mandatory SME sign-off as a hard gate**, not a soft nice-to-have — this
+  is an escalation from the big-N design, where SME review was one signal
+  among several statistical ones. At this volume it becomes *the* primary
+  validity check, because it's the only mechanism left that can catch "this
+  persona is real but the evidence behind it is thin" or "this pattern is
+  an artifact of one bad quarter." Extend the same governance bar §2.2
+  already requires for role *promotion* down to persona-level admission
+  too, at this data volume specifically.
+- **Counterexample-coverage audit, leaned on harder than at big-N.** How
+  many near-misses did discovery deliberately exclude, and why — this is
+  more diagnostic at small N than any distance number would be, precisely
+  because there's little enough data that a reviewer can actually inspect
+  all of it.
+
+### 5.4 Schema: unchanged structure, new required honesty fields
+
+The ontology and schema from §2.6 apply with **zero structural flex** — a
+persona is still Grounding/Behavioural/Context/Frame under a role, states
+and relationships still live in their own top-level registries, the
+state→persona promotion discipline from §2.5 still applies exactly as
+written (arguably it matters *more* at small N: less data per persona means
+more temptation to shortcut a circumstance straight into a persona identity,
+e.g. minting "hospitalized claimant" as a persona name rather than doing the
+harder work of separating the state module from the underlying trait).
+
+What's new is a set of **required, not optional**, fields that make the
+weaker evidentiary basis visible to every downstream consumer — this is
+the single most important thing to get right in this whole mode, because a
+persona mined at N=25 must never be silently indistinguishable, to a
+simulation harness consuming the bank later, from one mined at N=2,500:
+
+- `data_volume_regime: "small_n"` at **bank-meta level** (not just per
+  persona) — so an entire bank is legible as having gone through the
+  weaker-validation path. This specifically prevents someone later
+  comparing or merging banks mined at different volumes as if they were
+  apples-to-apples.
+- `n_instances` and `supporting_claim_families` as hard-required fields on
+  every persona (§5.3).
+- A capped `validation_status` ceiling: low-volume-mode personas cannot
+  reach the same `approved` value a big-N, fully-gated persona can — add a
+  distinct status (e.g. `approved_low_confidence`) below full `approved`
+  semantics, so a downstream simulation harness can programmatically
+  exclude anything below full confidence from compliance-sensitive test
+  runs **without needing to know which mode mined which persona** — the
+  status field carries that fact, not a convention someone has to remember.
+- `confidence_note` required wherever a big-N persona would just say
+  "validated" — a short, human-readable statement of what evidentiary basis
+  actually supports this specific persona at this specific volume.
+
+### 5.5 Mode selection: per role, on independent claim-family count — not per corpus, not on raw instance count
+
+**Gate per actor role, not once for the whole corpus.** A 250-claim corpus
+might easily have 200 claimant instances but only 20 doctor instances in the
+same run — forcing one mode for the entire corpus would either force
+big-N statistical treatment onto a role with far too little data, or force
+every role down to the weaker low-volume path even where a role genuinely
+has enough. **Mixed-mode corpora — some roles running the big-N pipeline,
+others running low-volume mode, in the same mining pass — are the expected,
+normal case, not a bug to reconcile.**
+
+**Gate on independent claim-family count supporting that role, not raw
+actor-instance count.** This was a real, explicit correction surfaced
+during the debate: instance count alone is gameable by correlated claims —
+a role could clear a instance-count threshold while representing only a
+handful of independent claim families (e.g. a role dominated by a few
+recurring assessors, or one that appears multiple times per claim), and the
+big-N pipeline's stability assumptions would be just as violated as at a
+much lower raw instance count. Denominate every threshold below in
+claim-family count.
+
+A three-tier structure, with the exact numeric floors treated as an
+**operational cutoff to be set by whoever owns risk/SME sign-off for the
+real programme, not a law of nature invented in this document**:
+
+- **Below a low floor** (roughly, single digits to ~15 independent claim
+  families) — don't attempt clustering or persona-minting for that role at
+  all. Mark the role `insufficient_data`. Carry every instance forward,
+  unclustered, as evidence for the next re-mining pass, rather than force a
+  cut on too little data and produce confident-looking nonsense.
+- **Between the low floor and a higher floor** (roughly, ~15 to ~100–150
+  independent claim families) — **low-volume mode**, per §5.2–§5.4.
+- **Above the higher floor** — the original §2 design as written: HDBSCAN,
+  bootstrap/time-slice stability gates, PSI/KL train/holdout validation.
+
+This is a **computed recommendation a human confirms**, not a silent
+automatic branch — the same posture the rest of this document takes toward
+every judgment call a fixed number can't fully substitute for.
+
+### 5.6 Avoiding the two failure modes at this scale
+
+At low volume, the temptation runs in both directions, and both are real
+failure modes to guard against with the same discipline, not asymmetric
+caution in one direction only:
+
+**Overfitting** (mistaking noise for archetypes): require every persona to
+have support from multiple *independent claim families*, not just multiple
+instances (§5.3); require logged counterexamples for every persona, not
+just supporting evidence; refuse to freeze a persona supported by a single
+correlated thread (repeat interactions with one actor, one surge event);
+keep low-support candidates at `provisional` or `insufficient_data`, never
+force them to `approved_low_confidence` just because the LLM can produce a
+plausible-sounding name and description for them; treat SME judgment as a
+veto on invented specificity, and treat the §5.2 falsification check as a
+veto on narrative-only distinctions with no feature support.
+
+**Under-differentiating** (lumping everyone into 2–3 generic personas
+because the sample feels too small to justify more, even though real
+variation exists in the data): start discovery from the actual behavioural
+contrasts visible in the evidence packs, not from a small preset taxonomy
+decided in advance; compare candidate personas by whether they would
+plausibly cause the simulated agentic workflow to take a different path or
+require different handling — the same test §2.1 already uses at big-N —
+not by how well two candidates can be narratively distinguished in prose;
+allow several small, distinct `provisional` personas to coexist if they
+produce different operational traces, rather than collapsing them
+prematurely for the sake of a smaller, tidier-looking bank; merge two
+candidates only when they're genuinely behaviourally indistinguishable
+against that same workflow-divergence test, not merely because the sample
+size feels uncomfortably thin to support two.
+
+**The rule that resolves the tension between the two, stated plainly**: do
+not force a small persona count just because the sample is small, and do
+not freeze a larger count just because the LLM can name plausible-sounding
+archetypes. At this volume, the right answer is very often a **narrower
+bank with more `provisional` and `insufficient_data` entries** than a
+big-N bank would have — not an artificially padded one and not an
+artificially tiny one.
+
 ---
 
 ## Appendix — open items not resolved by the debate, flagged honestly
@@ -565,6 +851,20 @@ else exists in the target codebase, not sharing pipeline stages with it.
   depends on real claim volume and how fast the book changes; start
   conservative and tune once the first few runs show how much the bank
   actually moves between re-mining passes.
+- **§5's exact numeric floors** (the independent-claim-family-count
+  thresholds separating `insufficient_data` / low-volume mode / big-N mode)
+  were deliberately left as an operational cutoff, not a specific number —
+  both models were explicit that inventing a precise threshold here would
+  be false precision; it should be set jointly with whoever owns risk/SME
+  sign-off, informed by how the falsification check (§5.2) and leave-one-
+  claim-family-out review (§5.3) actually behave on the real corpus, not
+  guessed in advance.
+- **§5.2's falsification-check mechanics** (exactly how "do the members
+  separate from counterexamples on the cited dimensions" gets computed —
+  a simple per-dimension distance/overlap check vs. something more
+  formal) were resolved in principle during the debate but not specified
+  down to an implementable algorithm — a reasonable first implementation
+  and a place to expect iteration once real evidence packs are in hand.
 - **How this pipeline's persona bank plugs into the simulation harness
   itself** (turning a persona + a scenario into a full simulated claim
   episode played against the agentic workflow) is explicitly out of scope
