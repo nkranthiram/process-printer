@@ -21,6 +21,7 @@ underneath it.
 | Recording something the document doesn't resolve, without pausing the build | `gap-ambiguity-logging/SKILL.md` |
 | Sanity-checking a process map against a real claim scenario | `scenario-validation/SKILL.md` |
 | Turning an approved process map into a builder-ready agentic workflow spec (deterministic/agent/human/gateway nodes) | `agentic-workflow-synthesis/SKILL.md` |
+| Verifying a generated agentic workflow still matches its source process map (coverage, description/citation alignment, scenario-outcome equivalence) and documenting the result | `workflow-alignment-testing/SKILL.md` |
 
 ## Chain
 
@@ -41,4 +42,10 @@ underneath it.
                                         ▼  (downstream, optional -- run once the
                                         │   human-facing map is approved, not before)
                              agentic-workflow-synthesis
+                                        │  (mandatory once a workflow is generated)
+                                        ▼
+                             workflow-alignment-testing
+                                        │
+                                        ▼
+                     docs/workflow-alignment-reports/*.md
 ```

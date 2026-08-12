@@ -84,6 +84,16 @@ definition of the method.
   unsupervised" traces back to real `claim_refs` from the source process
   map's own extraction — same citation discipline as the rest of this app,
   extended one layer downstream.
+- **Generating or regenerating a workflow is not done until it's been
+  tested against its source process map.** Run `workflow-alignment-testing`
+  (see Testing below) immediately after persisting a new
+  `AgenticWorkflowVersion` — never hand back a workflow as finished on the
+  strength of `validate_agentic_workflow` alone. That validator checks the
+  workflow is internally well-formed (real node kinds, real edges, grounding
+  declared, calibration metadata present); it does not check the workflow
+  still says the same thing as the process map it came from, or that a real
+  case produces the same outcome in both. Only `workflow-alignment-testing`
+  checks that.
 
 ## Method
 
@@ -161,6 +171,22 @@ firing rule, escalations handle, max iterations/stop conditions, guardrails.
 - Assuming a domain's terminology (e.g. "policy," "claim," "exclusion")
   carries over to a different source document — reclassify from that
   document's own claims rather than reusing prior node names or wording.
+
+## Testing
+
+Once a draft `AgenticWorkflowVersion` has passed `validate_agentic_workflow`
+and been persisted, hand off to **`workflow-alignment-testing/SKILL.md`**
+before considering the work complete. It checks three things this skill's
+own validator does not: every source task is actually represented (coverage),
+every derived node's description/citations are actually consistent with its
+source task (not just internally well-formed), and a real scenario produces
+the same outcome walked through either artifact (equivalence) — and it
+writes the result to a dated report under
+`docs/workflow-alignment-reports/`, per that skill's contract. Treat a
+freshly generated workflow as provisional until that report says `aligned`
+or `aligned-with-noted-gaps`; a `misaligned` or `not run` result means the
+workflow isn't ready to hand to a builder yet, regardless of what this
+skill's own validator said.
 
 ## Output
 
