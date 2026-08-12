@@ -379,3 +379,45 @@ breaker implementation (spec'd as a node, not built as running
 infrastructure); no actual UiPath Maestro export/build — this produces the
 spec a Maestro builder needs, not a Maestro process itself, exactly as the
 design doc states its own scope.
+
+## Decision: replaced the hand-rolled graph layout with `dagre`
+
+**Problem:** `layout.ts` originally computed node positions with a
+hand-rolled "rank = longest path from a root, iterative relaxation" algorithm
+(chosen at the time to fix a text/box overlap bug — see PROGRESS.md task 22).
+It had no cycle handling. The agentic workflow contains a genuine cycle
+(`HUM-01 <-> HUM-02`, the human escalation/request-more-info loop, and
+`BR-01 <-> HUM-01`) — real, not a bug in the workflow data, since a human
+reviewer legitimately can send a claim back for more info and get it again.
+Longest-path relaxation has no way to converge on a cycle: each pass around
+it pushed the affected nodes' rank higher, and the algorithm's bounded
+pass-count cap (node count + 1) just stopped the runaway growth at an
+arbitrary number — confirmed empirically at **rank 94**, for a 16-node graph
+that should be ~8 ranks deep. That produced one or two edges stretched across
+an enormous empty gap on screen — the "edges spanning several pages" the user
+reported, present in *both* orientations tried (the bug was in ranking, not
+in top-to-bottom vs. left-to-right).
+
+**Decision:** replaced the hand-rolled algorithm with `dagre`
+(`npm install dagre`), a maintained layered-graph-drawing library that
+performs a feedback-arc-set pass to break cycles before ranking — the
+standard, correct way to handle this, and the same class of algorithm
+Camunda/n8n/UiPath actually use under the hood. `computeLayeredLayout`
+(process map, top-to-bottom) and `computeAgenticWorkflowLayout` (agentic
+workflow, left-to-right) are now both thin wrappers around one
+`computeDagreLayout` helper, rather than two divergent implementations.
+
+**Verified, not assumed:** ran the real AAMI agentic-workflow data (16 nodes,
+29 edges, including both real cycles) through dagre directly — every node's
+rank now progresses smoothly (~300px between consecutive ranks), with `GW-01`
+sitting immediately after `BR-01` instead of being blown out to rank 81+.
+Added a regression test (`layout.test.ts`) using a small synthetic graph with
+a deliberate cycle, asserting the resulting spread stays bounded by node
+count rather than able to run away arbitrarily.
+
+**Why left-to-right for the agentic workflow specifically (process map stays
+top-to-bottom):** a 15+ node graph reads better across a wide screen than
+down a tall one — this was the user's own explicit request, consistent with
+how Camunda/n8n/UiPath present a graph this size. The process map's smaller
+task count (≤11 today) doesn't have the same problem, so it was left
+unchanged rather than switched for consistency's own sake.

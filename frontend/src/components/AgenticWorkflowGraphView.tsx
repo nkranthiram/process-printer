@@ -3,6 +3,7 @@ import ReactFlow, {
   Background,
   Controls,
   MarkerType,
+  MiniMap,
   type Edge,
   type Node,
 } from 'reactflow'
@@ -33,6 +34,18 @@ function edgeColor(conditionLabel: string | null): string {
   return '#94a3b8' // slate-400, default
 }
 
+// MiniMap needs a real CSS color value, not a Tailwind class name — a tiny,
+// explicit lookup (not a DOM read) mirrors AGENTIC_NODE_STYLE's dot colors
+// in nodeStyles.ts as literal hex.
+const DOT_COLOR: Record<string, string> = {
+  deterministic: '#0ea5e9',
+  agent: '#8b5cf6',
+  agent_escalation: '#f59e0b',
+  human: '#f43f5e',
+  service: '#94a3b8',
+  gateway: '#10b981',
+}
+
 export default function AgenticWorkflowGraphView({ workflow, selectedNodeId, onSelectNode }: Props) {
   const positions = useMemo(
     () => computeAgenticWorkflowLayout(workflow.nodes, workflow.edges),
@@ -59,12 +72,14 @@ export default function AgenticWorkflowGraphView({ workflow, selectedNodeId, onS
           source: e.from_node_id,
           target: e.to_node_id,
           label: e.condition_label ?? undefined,
+          type: 'smoothstep', // right-angle connectors, the standard Camunda/n8n diagram convention
+          pathOptions: { borderRadius: 8 },
           animated: false,
           style: { stroke: color, strokeWidth: 1.5 },
-          labelStyle: { fill: '#475569', fontSize: 10, fontWeight: 500 },
+          labelStyle: { fill: '#475569', fontSize: 9.5, fontWeight: 500 },
           labelBgStyle: { fill: '#f8fafc', fillOpacity: 0.95 },
-          labelBgPadding: [5, 2] as [number, number],
-          markerEnd: { type: MarkerType.ArrowClosed, color },
+          labelBgPadding: [4, 2] as [number, number],
+          markerEnd: { type: MarkerType.ArrowClosed, color, width: 16, height: 16 },
         }
       }),
     [workflow.edges],
@@ -78,12 +93,21 @@ export default function AgenticWorkflowGraphView({ workflow, selectedNodeId, onS
         nodeTypes={nodeTypes}
         onNodeClick={(_, node) => onSelectNode(node.id)}
         fitView
+        fitViewOptions={{ padding: 0.12 }}
         proOptions={{ hideAttribution: true }}
-        minZoom={0.15}
+        minZoom={0.3}
+        maxZoom={1.5}
         nodesDraggable={false}
+        defaultEdgeOptions={{ type: 'smoothstep' }}
       >
-        <Background color="#e2e8f0" gap={28} />
+        <Background color="#e2e8f0" gap={24} />
         <Controls showInteractive={false} className="!bg-white !border-slate-200 !shadow-sm" />
+        <MiniMap
+          zoomable
+          pannable
+          className="!bg-white !border !border-slate-200"
+          nodeColor={(n) => DOT_COLOR[(n.data as AgenticWorkflowGraphNodeData)?.node?.node_kind] ?? '#94a3b8'}
+        />
       </ReactFlow>
     </div>
   )

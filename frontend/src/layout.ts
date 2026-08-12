@@ -1,20 +1,25 @@
+import dagre from 'dagre'
 import type { AgenticWorkflowEdge, AgenticWorkflowNode, ProcessEdge, ProcessTask } from './api'
 
-/** Layered top-to-bottom auto-layout, computed client-side.
+/** Auto-layout for both graphs, computed client-side via dagre.
  *
- * The backend stores a coarse grid position per task (see backend/app/seed.py),
- * which was spaced tightly enough that node text overlapped once real titles
- * (which vary in length) were rendered — see PROGRESS.md task 22. Rather than
- * trust stored positions, this recomputes layout from the actual graph
- * structure every render: each task's rank is its longest-path distance from
- * the root, tasks in the same rank are laid out in a row with generous fixed
- * spacing, and the whole thing self-heals when a change request adds/removes
- * a task — no backend position math to keep in sync.
+ * PREVIOUSLY a hand-rolled "rank = longest path from a root, iterative
+ * relaxation" algorithm lived here. It had a real, user-visible bug: the
+ * agentic workflow contains a genuine cycle (HUM-01 <-> HUM-02, the human
+ * escalation/request-more-info loop; BR-01 <-> HUM-01 too) and longest-path
+ * relaxation has no cycle handling — each pass around the cycle pushed the
+ * rank higher, and the bounded pass-count cap (node count + 1) just stopped
+ * it at an arbitrary, huge number (observed: rank 94 for nodes that should
+ * be ~4-8 deep). That stretched a couple of edges across an enormous empty
+ * gap — the "edges spanning several pages" the user actually saw, in BOTH
+ * the vertical and horizontal orientations tried before this fix (the bug
+ * was in the ranking step, not the orientation).
+ *
+ * dagre breaks cycles properly (a feedback-arc-set pass before ranking,
+ * standard for layered graph drawing — same class of algorithm Camunda/
+ * n8n/UiPath actually use under the hood) and is a maintained, tested
+ * library rather than a second hand-rolled implementation to keep re-fixing.
  */
-
-const COLUMN_WIDTH = 300 // vertical distance between ranks (this is a top-to-bottom flow)
-const ROW_WIDTH = 340 // horizontal distance between siblings in the same rank
-const NODE_WIDTH = 280
 
 export interface LayoutPosition {
   x: number
@@ -26,87 +31,71 @@ interface GraphEdgeLike {
   to: string
 }
 
-/** The actual layout algorithm, generalized over any node-id list + edge list
- * so it can lay out a ProcessMap's tasks/edges OR an AgenticWorkflow's
- * nodes/edges identically — both are DAGs that need the same top-to-bottom,
- * self-healing, no-overlap treatment (see module docstring above). */
-function computeLayeredLayoutGeneric(nodeIds: string[], edges: GraphEdgeLike[]): Map<string, LayoutPosition> {
+interface DagreOptions {
+  direction: 'TB' | 'LR'
+  nodeWidth: number
+  nodeHeight: number
+  rankSep: number // gap between ranks (edge-to-edge, not center-to-center)
+  nodeSep: number // gap between siblings within a rank
+}
+
+function computeDagreLayout(nodeIds: string[], edges: GraphEdgeLike[], options: DagreOptions): Map<string, LayoutPosition> {
   const positions = new Map<string, LayoutPosition>()
   if (nodeIds.length === 0) return positions
 
-  const idSet = new Set(nodeIds)
-  const outgoing = new Map<string, string[]>(nodeIds.map((id) => [id, []]))
-  const incomingCount = new Map<string, number>(nodeIds.map((id) => [id, 0]))
+  const g = new dagre.graphlib.Graph()
+  g.setGraph({
+    rankdir: options.direction,
+    ranksep: options.rankSep,
+    nodesep: options.nodeSep,
+    marginx: 20,
+    marginy: 20,
+  })
+  g.setDefaultEdgeLabel(() => ({}))
 
+  for (const id of nodeIds) {
+    g.setNode(id, { width: options.nodeWidth, height: options.nodeHeight })
+  }
+
+  const idSet = new Set(nodeIds)
   for (const e of edges) {
     if (!idSet.has(e.from) || !idSet.has(e.to)) continue
-    outgoing.get(e.from)!.push(e.to)
-    incomingCount.set(e.to, (incomingCount.get(e.to) ?? 0) + 1)
+    g.setEdge(e.from, e.to)
   }
 
-  // Rank = longest path from any root (node with no incoming edges). Longest-
-  // path (not shortest/BFS) so a node with two incoming edges from different
-  // ranks always sits below both — avoids edges pointing "backwards" visually.
-  const rank = new Map<string, number>(nodeIds.map((id) => [id, 0]))
-  const roots = nodeIds.filter((id) => (incomingCount.get(id) ?? 0) === 0)
-  const startNodes = roots.length > 0 ? roots : [nodeIds[0]]
+  dagre.layout(g)
 
-  // Iterative relaxation (bounded by node count) rather than recursive DFS —
-  // safe even if validation somehow let a cycle through; it just stops
-  // improving after N passes instead of infinite-looping.
-  for (let pass = 0; pass < nodeIds.length + 1; pass++) {
-    let changed = false
-    for (const id of nodeIds) {
-      const r = rank.get(id)!
-      for (const next of outgoing.get(id) ?? []) {
-        if ((rank.get(next) ?? 0) < r + 1) {
-          rank.set(next, r + 1)
-          changed = true
-        }
-      }
-    }
-    if (!changed) break
-  }
-  void startNodes // ranks are computed globally via relaxation, not per-root traversal
-
-  const byRank = new Map<number, string[]>()
   for (const id of nodeIds) {
-    const r = rank.get(id) ?? 0
-    if (!byRank.has(r)) byRank.set(r, [])
-    byRank.get(r)!.push(id)
-  }
-
-  const maxRowLength = Math.max(...[...byRank.values()].map((ids) => ids.length))
-  const canvasWidth = maxRowLength * ROW_WIDTH
-
-  for (const [r, ids] of byRank) {
-    const rowWidth = ids.length * ROW_WIDTH
-    const startX = (canvasWidth - rowWidth) / 2 + ROW_WIDTH / 2 - NODE_WIDTH / 2
-    ids.forEach((id, i) => {
-      positions.set(id, { x: startX + i * ROW_WIDTH, y: r * COLUMN_WIDTH })
-    })
+    const n = g.node(id)
+    // dagre positions are node CENTERS; React Flow positions are top-left
+    // corners — convert once here so every caller gets top-left directly.
+    positions.set(id, { x: n.x - options.nodeWidth / 2, y: n.y - options.nodeHeight / 2 })
   }
 
   return positions
 }
 
+/** Process map: unchanged top-to-bottom orientation, sized for TaskNode.tsx's
+ * fixed 264x104 card. */
 export function computeLayeredLayout(tasks: ProcessTask[], edges: ProcessEdge[]): Map<string, LayoutPosition> {
-  return computeLayeredLayoutGeneric(
+  return computeDagreLayout(
     tasks.map((t) => t.id),
     edges.map((e) => ({ from: e.from_task_id, to: e.to_task_id })),
+    { direction: 'TB', nodeWidth: 264, nodeHeight: 104, rankSep: 170, nodeSep: 60 },
   )
 }
 
-/** Same algorithm, applied to an AgenticWorkflow's nodes/edges instead of a
- * ProcessMap's tasks/edges — the agentic workflow view needs the identical
- * spacious, self-healing layout the process map already has (see
- * AgenticWorkflowGraphView.tsx), not a second, divergent implementation. */
+/** Agentic workflow: left-to-right, sized for AgenticWorkflowGraphNode.tsx's
+ * compact card (rectangular nodes) / diamond (gateway nodes) — see that file
+ * for why left-to-right specifically: a wide flow reads better than a tall
+ * one for a 15+ node graph, matching Camunda/n8n/UiPath's default. */
 export function computeAgenticWorkflowLayout(
   nodes: AgenticWorkflowNode[],
   edges: AgenticWorkflowEdge[],
 ): Map<string, LayoutPosition> {
-  return computeLayeredLayoutGeneric(
+  return computeDagreLayout(
     nodes.map((n) => n.id),
     edges.map((e) => ({ from: e.from_node_id, to: e.to_node_id })),
+    { direction: 'LR', nodeWidth: 208, nodeHeight: 64, rankSep: 90, nodeSep: 36 },
   )
 }
