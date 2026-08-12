@@ -16,16 +16,6 @@ const COLUMN_WIDTH = 300 // vertical distance between ranks (this is a top-to-bo
 const ROW_WIDTH = 340 // horizontal distance between siblings in the same rank
 const NODE_WIDTH = 280
 
-// Horizontal (left-to-right) equivalents, used by the agentic workflow view —
-// see computeAgenticWorkflowLayout below. Compact nodes (see
-// AgenticWorkflowGraphNode.tsx) need much less spacing than the process
-// map's larger cards, and a left-to-right flow uses a wide screen far better
-// than a tall top-to-bottom one for a graph this size — Camunda/n8n/UiPath
-// all default to horizontal for exactly this reason.
-const RANK_GAP_H = 260 // horizontal distance between ranks
-const SIBLING_GAP_H = 96 // vertical distance between siblings in the same rank
-const NODE_HEIGHT_H = 64
-
 export interface LayoutPosition {
   x: number
   y: number
@@ -38,18 +28,9 @@ interface GraphEdgeLike {
 
 /** The actual layout algorithm, generalized over any node-id list + edge list
  * so it can lay out a ProcessMap's tasks/edges OR an AgenticWorkflow's
- * nodes/edges identically — both are DAGs that need the same self-healing,
- * no-overlap rank-then-position treatment (see module docstring above).
- * `orientation` picks which axis is "rank" (the DAG's depth) vs "sibling"
- * (nodes at the same depth) — 'vertical' (top-to-bottom, rank=y) for the
- * process map, 'horizontal' (left-to-right, rank=x) for the agentic
- * workflow, whose compact nodes and larger node count read far better across
- * a wide screen than down a tall one. */
-function computeLayeredLayoutGeneric(
-  nodeIds: string[],
-  edges: GraphEdgeLike[],
-  options: { orientation: 'vertical' | 'horizontal'; rankGap: number; siblingGap: number; siblingSize: number },
-): Map<string, LayoutPosition> {
+ * nodes/edges identically — both are DAGs that need the same top-to-bottom,
+ * self-healing, no-overlap treatment (see module docstring above). */
+function computeLayeredLayoutGeneric(nodeIds: string[], edges: GraphEdgeLike[]): Map<string, LayoutPosition> {
   const positions = new Map<string, LayoutPosition>()
   if (nodeIds.length === 0) return positions
 
@@ -95,19 +76,14 @@ function computeLayeredLayoutGeneric(
     byRank.get(r)!.push(id)
   }
 
-  const { orientation, rankGap, siblingGap, siblingSize } = options
   const maxRowLength = Math.max(...[...byRank.values()].map((ids) => ids.length))
-  const canvasSize = maxRowLength * siblingGap
+  const canvasWidth = maxRowLength * ROW_WIDTH
 
   for (const [r, ids] of byRank) {
-    const rowSize = ids.length * siblingGap
-    const start = (canvasSize - rowSize) / 2 + siblingGap / 2 - siblingSize / 2
+    const rowWidth = ids.length * ROW_WIDTH
+    const startX = (canvasWidth - rowWidth) / 2 + ROW_WIDTH / 2 - NODE_WIDTH / 2
     ids.forEach((id, i) => {
-      const siblingPos = start + i * siblingGap
-      const rankPos = r * rankGap
-      // 'vertical': rank is depth-down (y), siblings spread left-right (x).
-      // 'horizontal': rank is depth-across (x), siblings spread top-bottom (y).
-      positions.set(id, orientation === 'vertical' ? { x: siblingPos, y: rankPos } : { x: rankPos, y: siblingPos })
+      positions.set(id, { x: startX + i * ROW_WIDTH, y: r * COLUMN_WIDTH })
     })
   }
 
@@ -118,15 +94,13 @@ export function computeLayeredLayout(tasks: ProcessTask[], edges: ProcessEdge[])
   return computeLayeredLayoutGeneric(
     tasks.map((t) => t.id),
     edges.map((e) => ({ from: e.from_task_id, to: e.to_task_id })),
-    { orientation: 'vertical', rankGap: COLUMN_WIDTH, siblingGap: ROW_WIDTH, siblingSize: NODE_WIDTH },
   )
 }
 
-/** Same algorithm, applied to an AgenticWorkflow's nodes/edges — but laid out
- * left-to-right with compact spacing (see AgenticWorkflowGraphNode.tsx and
- * the RANK_GAP_H/SIBLING_GAP_H constants above), matching how Camunda/n8n/
- * UiPath present a node graph this size: a wide horizontal flow reads far
- * better than a tall vertical scroll for 15+ nodes. */
+/** Same algorithm, applied to an AgenticWorkflow's nodes/edges instead of a
+ * ProcessMap's tasks/edges — the agentic workflow view needs the identical
+ * spacious, self-healing layout the process map already has (see
+ * AgenticWorkflowGraphView.tsx), not a second, divergent implementation. */
 export function computeAgenticWorkflowLayout(
   nodes: AgenticWorkflowNode[],
   edges: AgenticWorkflowEdge[],
@@ -134,6 +108,5 @@ export function computeAgenticWorkflowLayout(
   return computeLayeredLayoutGeneric(
     nodes.map((n) => n.id),
     edges.map((e) => ({ from: e.from_node_id, to: e.to_node_id })),
-    { orientation: 'horizontal', rankGap: RANK_GAP_H, siblingGap: SIBLING_GAP_H, siblingSize: NODE_HEIGHT_H },
   )
 }
